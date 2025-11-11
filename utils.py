@@ -651,7 +651,7 @@ def handle_mouse_preview(context, event):
     if shared_data.snap_to_existing:
         shared_data.temp_point = shared_data.snap_to_existing
         return
-    if (base_obj := get_surface_object(context)) and (ray_origin := view3d_utils.region_2d_to_origin_3d(context.region, context.region_data, mouse_2d)) and (ray_direction := view3d_utils.region_2d_to_vector_3d(context.region, context.region_data, mouse_2d)):
+    if (base_obj := get_surface_object(context)) and base_obj.data and base_obj.data.vertices and (ray_origin := view3d_utils.region_2d_to_origin_3d(context.region, context.region_data, mouse_2d)) and (ray_direction := view3d_utils.region_2d_to_vector_3d(context.region, context.region_data, mouse_2d)):
         matrix_inv = base_obj.matrix_world.inverted()
         success, hit_location, *_ = base_obj.ray_cast(matrix_inv @ ray_origin, (matrix_inv.to_3x3() @ ray_direction).normalized())
         if success:
