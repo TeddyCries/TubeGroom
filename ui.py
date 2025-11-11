@@ -629,14 +629,15 @@ class TUBEGROOM_PT_controls_panel(bpy.types.Panel):
             "Esc: Cancel Region",
             "Left Click: Insert",
             "Ctrl+Click: Extrude",
-            "Shift+Click: Move (edge) / hierarchy (body)",
+            "Shift+Click: Move (edge)(point) / hierarchy (body)",
+            "Shift+Alt+Click: Move column (point)",
             "Alt+Click: Scale (edge) / hierarchy (body)",
-            "Shift+Alt+Click: Rotate (edge/body) / Move column (point)",
+            "Shift+Alt+Click: Rotate (edge) / hierarchy (body)",
             "Ctrl+Alt+Click: Twist (edge) / hierarchy (body)",
             "Right Click: Delete",
             "Ctrl+Z: Undo",
             "Ctrl+Shift+Z: Redo",
-            "Tab: Exiting",
+            "Tab: Exit",
         ]
         for text in controls:
             command, _, description = text.partition(":")
