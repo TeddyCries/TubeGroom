@@ -8,10 +8,7 @@ TubeGroom is an open-source Blender add-on for grooming-based modeling using tub
 
 ## ✨ Features
 
--🎨 Interactive tube-mesh modeling
--📐 Tube-based distribution workflow
--⚡ Real-time mesh deformation
--⌨️ Keymap-driven controls
+🎨 Interactive tube-mesh modeling 📐 Tube-based distribution workflow ⚡ Real-time mesh deformation ⌨️ Keymap-driven controls
 
 ## 📦 Installation
 
