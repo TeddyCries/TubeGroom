@@ -1,0 +1,19 @@
+schema_version = "1.0.0"
+
+id = "tubegroom"
+version = "1.0.0"
+name = "TubeGroom"
+tagline = "Interactive mesh grooming tools"
+maintainer = "TeddyCry"
+type = "add-on"
+
+tags = ["Add Curve", "Modeling"]
+
+blender_version_min = "4.5.0"
+
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
+
+# [permissions]
+# None
