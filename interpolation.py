@@ -72,10 +72,17 @@ def tubegroom_analyze_region_topology(system, region_id):
     return faces
 def tubegroom_poisson_disk_hashgrid(poly_uv, tri_indices, radius, seed):
     cs = radius / math.sqrt(2.0)
-    xs = [p[0] for p in poly_uv]
-    ys = [p[1] for p in poly_uv]
-    minx, maxx = min(xs), max(xs)
-    miny, maxy = min(ys), max(ys)
+    minx = maxx = poly_uv[0][0]
+    miny = maxy = poly_uv[0][1]
+    for p in poly_uv[1:]:
+        if p[0] < minx:
+            minx = p[0]
+        elif p[0] > maxx:
+            maxx = p[0]
+        if p[1] < miny:
+            miny = p[1]
+        elif p[1] > maxy:
+            maxy = p[1]
     ix0 = int(math.floor(minx / cs))
     ix1 = int(math.ceil(maxx / cs))
     iy0 = int(math.floor(miny / cs))
@@ -83,6 +90,7 @@ def tubegroom_poisson_disk_hashgrid(poly_uv, tri_indices, radius, seed):
     grid = {}
     pts = []
     r_sq = radius * radius
+    offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 0), (0, 1), (1, -1), (1, 0), (1, 1)]
     for i in range(ix0, ix1):
         for j in range(iy0, iy1):
             a, b = utils.hash2(i, j, seed)
@@ -90,7 +98,13 @@ def tubegroom_poisson_disk_hashgrid(poly_uv, tri_indices, radius, seed):
             py = miny + (j - iy0 + b) * cs
             if not utils.point_in_triangulated_poly((px, py), poly_uv, tri_indices):
                 continue
-            if any((px - nb[0])**2 + (py - nb[1])**2 < r_sq for di in (-1, 0, 1) for dj in (-1, 0, 1) if (nb := grid.get((i + di, j + dj)))):
+            too_close = False
+            for di, dj in offsets:
+                if nb := grid.get((i + di, j + dj)):
+                    if (px - nb[0])**2 + (py - nb[1])**2 < r_sq:
+                        too_close = True
+                        break
+            if too_close:
                 continue
             grid[(i, j)] = (px, py)
             pts.append((px, py))
@@ -179,12 +193,14 @@ def _update_curves_map(system):
     if not system or 'curves' not in system:
         system['curves_map'] = {}
         return
-    curves_by_region = {}
+    from collections import defaultdict
+    curves_by_region = defaultdict(list)
     for i, curve in enumerate(system['curves']):
         rid = curve.get('region_id')
         if rid is not None:
-            curves_by_region.setdefault(rid, []).append(i)
-    system['curves_map'] = {rid: {'start_idx': min(indices), 'count': len(indices)} for rid, indices in curves_by_region.items() if indices}
+            curves_by_region[rid].append(i)
+    system['curves_map'] = {rid: {'start_idx': indices[0], 'count': len(indices)} 
+                           for rid, indices in curves_by_region.items()}
 def main_guide_curve(system, region_id):
     faces = system.get('face_topology', {}).get(region_id, [])
     if not faces:
@@ -347,23 +363,19 @@ def rebuild_regions_from_merged_mesh(obj):
     if not all(attr in mesh.attributes for attr in ['region_id', 'subregion_id']):
         return False
     shared_data.reset_all_data(clear_history=False)
-    # Step 1: Group vertex indices by (rid, sid)
-    verts_by_subregion = {}
+    from collections import defaultdict
+    verts_by_subregion = defaultdict(list)
     rid_attr = mesh.attributes['region_id'].data
     sid_attr = mesh.attributes['subregion_id'].data
-    for i, v in enumerate(mesh.vertices):
+    for i in range(len(mesh.vertices)):
         rid = rid_attr[i].value
         sid = sid_attr[i].value
-        if rid <= 0 or sid <= 0:
-            continue
-        key = (rid, sid)
-        if key not in verts_by_subregion:
-            verts_by_subregion[key] = []
-        verts_by_subregion[key].append(i)
+        if rid > 0 and sid > 0:
+            verts_by_subregion[(rid, sid)].append(i)
     # Step 2: For each subregion, sort vertices by walking the edges
     sorted_points_by_subregion = {}
-    # Create an adjacency list for the entire mesh once
-    adj_list = [[] for _ in range(len(mesh.vertices))]
+    num_verts = len(mesh.vertices)
+    adj_list = [[] for _ in range(num_verts)]
     for edge in mesh.edges:
         v1, v2 = edge.vertices
         adj_list[v1].append(v2)
@@ -393,8 +405,9 @@ def rebuild_regions_from_merged_mesh(obj):
                 break
             prev, curr = curr, next_node
         if len(ordered_indices) == len(vert_indices):
+            matrix = obj.matrix_world
             sorted_points_by_subregion[(rid, sid)] = [
-                obj.matrix_world @ mesh.vertices[v_idx].co
+                matrix @ mesh.vertices[v_idx].co
                 for v_idx in ordered_indices
             ]
     # Step 3: Rebuild the core.Region and core.Subregion objects
