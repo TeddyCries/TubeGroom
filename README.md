@@ -2,7 +2,7 @@
 
 [![Blender](https://img.shields.io/badge/Blender-4.5.0+-orange.svg)](https://www.blender.org/)
 [![License](https://img.shields.io/badge/License-GPL%203.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/TeddyCry/tubegroom/releases)
+[![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/TeddyCries/TubeGroom/releases)
 
 TubeGroom is an open-source Blender add-on for grooming-based modeling using tubular structures.
 
