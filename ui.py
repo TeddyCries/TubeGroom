@@ -544,6 +544,9 @@ class TUBEGROOM_PT_main_panel(bpy.types.Panel):
     bl_region_type = 'UI'
     bl_category = "TubeGroom"
 
+    def draw_header(self, context):
+        if shared_data.custom_icons and "main_icon" in shared_data.custom_icons:
+            self.layout.label(text="", icon_value=shared_data.custom_icons["main_icon"].icon_id)
     
     def draw(self, context):
         layout = self.layout
