@@ -2,54 +2,55 @@
 TubeGroom: tools for creating, editing, and managing tube-based geometry in Blender.
 """
 
-import importlib
-import sys
-import bpy
-from bpy.app.handlers import persistent
-from . import core
-
 bl_info = {
     "name": "TubeGroom",
     "author": "TeddyCry",
-    "version": (1, 0, 0),
+    "version": (1, 0, 1),
     "blender": (4, 5, 0),
     "location": "View3D > Sidebar > TubeGroom",
     "description": "Interactive mesh grooming tools",
     "category": "Mesh",
 }
 
-MODULES = ["prop", "ui"]
-
-_loaded = []
-
-@persistent
-def _clear_state(_):
-    if hasattr(core, "reset_all_data"):
-        try:
-            core.reset_all_data(clear_history=True)
-        except Exception:
-            pass
-
 def register():
-    global _loaded
-    _loaded = []
-    for name in MODULES:
-        full = f"{__package__}.{name}"
-        mod = importlib.reload(sys.modules[full]) if full in sys.modules else importlib.import_module(f".{name}", __package__)
-        _loaded.append(mod)
-        if hasattr(mod, "register"):
-            mod.register()
-    if _clear_state not in bpy.app.handlers.load_post:
-        bpy.app.handlers.load_post.append(_clear_state)
+    import bpy
+    import os
+    from . import prop, ui
+
+    for name, p in prop.SCENE_PROPERTIES:
+        setattr(bpy.types.Scene, name, p)
+    for name, p in prop.RENDER_PROPERTIES:
+        setattr(bpy.types.RenderSettings, name, p)
+
+    icon_path = os.path.join(os.path.dirname(__file__), "icons", "TG_Main_Icon.png")
+    if os.path.exists(icon_path):
+        import bpy.utils.previews
+        if not hasattr(bpy.utils.previews, 'custom_icons'):
+            bpy.utils.previews.custom_icons = bpy.utils.previews.new()
+        bpy.utils.previews.custom_icons.load("main_icon", icon_path, 'IMAGE')
+    for cls in ui.classes:
+        bpy.utils.register_class(cls)
 
 def unregister():
+    from . import prop, ui
     try:
-        bpy.app.handlers.load_post.remove(_clear_state)
+        ui.operators.modal_state.edit_mode = False
+        from . import drawing
+        drawing.remove_draw_handlers()
+        ui.operators.modal_state.clear_modal_state()
     except Exception:
         pass
-    for mod in reversed(_loaded):
-        if hasattr(mod, "unregister"):
-            try:
-                mod.unregister()
-            except Exception:
-                pass
+
+    import bpy.utils.previews
+    if hasattr(bpy.utils.previews, 'custom_icons'):
+        bpy.utils.previews.remove(bpy.utils.previews.custom_icons)
+        delattr(bpy.utils.previews, 'custom_icons')
+    for cls in reversed(ui.classes):
+        bpy.utils.unregister_class(cls)
+
+    for name, _ in reversed(prop.SCENE_PROPERTIES):
+        if hasattr(bpy.types.Scene, name):
+            delattr(bpy.types.Scene, name)
+    for name, _ in reversed(prop.RENDER_PROPERTIES):
+        if hasattr(bpy.types.RenderSettings, name):
+            delattr(bpy.types.RenderSettings, name)

@@ -1,19 +1,18 @@
 import bpy
 import colorsys
 from mathutils import Vector
-from mathutils.bvhtree import BVHTree
 from bpy_extras import view3d_utils
 from collections import deque
-from . import core as shared_data, geometry
+from . import geometry
 
 # Color utilities
-def get_unique_color(idx):
+def color_id(idx):
     """Generates a visually distinct color based on an index using the golden ratio."""
     golden_ratio_conjugate = 0.61803398875
     h = (idx * golden_ratio_conjugate) % 1.0
     r, g, b = colorsys.hsv_to_rgb(h, 1.0, 1.0)
     return (r, g, b, 0.5)
-def group_by_color(positions, colors):
+def regions_color(positions, colors):
     """Group positions by their corresponding RGBA color tuples."""
     if not positions or not colors:
         return {}
@@ -24,28 +23,32 @@ def group_by_color(positions, colors):
     return groups
 
 # Object naming utilities
-def is_tubegroom_object(obj):
+def tubegroom_object(obj):
     """Checks if an object is a TubeGroom object by its name prefix."""
     return obj and obj.name.startswith("GEO_TubeGroom_")
-def get_base_name_from_obj(obj):
+def get_base_name(obj):
     """Extracts the base name (e.g., "TubeGroom_Cube") from a GEO object."""
-    if not is_tubegroom_object(obj):
+    if not tubegroom_object(obj):
         return None
-    return obj.name[14:]  # Remove "GEO_TubeGroom_" prefix
+    return obj.name[14:]
 
 # Math and geometry utilities
-def to_2d(point_3d, context):
+def surface_normal(obj, point):
+    """Calculates the world-space surface normal of an object at a given world-space point."""
+    _, normal = closest_point(obj, point)
+    return normal if normal is not None else Vector((0, 0, 1))
+def project_2d(point_3d, context):
     """Projects a 3D world-space point to 2D screen coordinates."""
     return view3d_utils.location_3d_to_region_2d(context.region, context.region_data, point_3d)
-def point_segment_distance_squared_3d(p, a, b):
-    """Calculates the squared distance from a point to a 3D line segment."""
-    l2 = (b - a).length_squared
+def dist2_seg3(p, a, b):
+    """Squared distance from point p to 3D segment a-b."""
+    ab = b - a
+    l2 = ab.length_squared
     if l2 == 0.0:
         return (p - a).length_squared
-    t = max(0, min(1, (p - a).dot(b - a) / l2))
-    projection = a + t * (b - a)
-    return (p - projection).length_squared
-def point_to_line_distance_2d_sq(point, line_start, line_end):
+    t = max(0, min(1, (p - a).dot(ab) / l2))
+    return (p - (a + t * ab)).length_squared
+def dist2_seg2(point, line_start, line_end):
     """Calculates the squared distance from a point to a 2D line segment."""
     px, py = point
     x1, y1 = line_start
@@ -86,17 +89,15 @@ def barycentric(p, a, b, c):
     w = 1.0 - u - v
     ok = (u >= -1e-6) and (v >= -1e-6) and (w >= -1e-6)
     return (w, v, u, ok)
-def triangulate_face(points, tol=1e-9):
+def tri_face(points, tol=1e-9):
     """Triangulate a polygon loop using ear clipping."""
     n = len(points)
     if n < 3:
         return []
-    # Build a 2D list and index map
     uv = [(float(p[0]), float(p[1])) for p in points]
     idx = list(range(n))
     def area2(a, b, c):
         return (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0])
-    # Ensure counter-clockwise orientation
     a = 0.0
     for i in range(n):
         x1, y1 = uv[i]
@@ -106,7 +107,6 @@ def triangulate_face(points, tol=1e-9):
         uv.reverse()
         idx.reverse()
     def point_in_tri(p, a, b, c):
-        # Barycentric sign test with tolerance
         s1 = area2(a,b,p)
         s2 = area2(b,c,p)
         s3 = area2(c,a,p)
@@ -119,15 +119,12 @@ def triangulate_face(points, tol=1e-9):
     guard = 0
     while len(v) > 3 and guard < len(points) * len(points):
         guard += 1
-        ear_found = False
         m = len(v)
         for k in range(m):
             i0, i1, i2 = v[(k-1)%m], v[k], v[(k+1)%m]
             a, b, c = uv[i0], uv[i1], uv[i2]
-            # Check convexity and degeneracy
             if area2(a, b, c) <= tol:
                 continue
-            # Skip ears containing other points
             ok = True
             for j in v:
                 if j in (i0, i1, i2):
@@ -140,37 +137,29 @@ def triangulate_face(points, tol=1e-9):
             # Clip ear
             res.append([idx[i0], idx[i1], idx[i2]])
             del v[k]
-            ear_found = True
-            break
-        if not ear_found:
-            # Fallback: fan triangulation (handles nearly-degenerate polygons)
-            res.clear()
-            for k in range(1, len(v)-1):
-                res.append([idx[v[0]], idx[v[k]], idx[v[k+1]]])
             break
     if len(v) == 3:
         res.append([idx[v[0]], idx[v[1]], idx[v[2]]])
     return res
-def calculate_tip_face_normal(positions, surface_obj):
-    """Calculates the average normal of a face loop, oriented away from the surface."""
+def tip_normal(positions, surface_obj):
+    """Return the average normal of a face loop, oriented away from the surface."""
     if len(positions) < 3:
         return Vector((0, 0, 1))
-    v1 = positions[1] - positions[0]
-    v2 = positions[2] - positions[0]
-    normal = v1.cross(v2)
-    if normal.length > 0:
-        normal.normalize()
-        centroid = sum(positions, Vector()) / len(positions)
-        if surface_obj and surface_obj.type == 'MESH':
-            surface_normal = get_surface_normal_at_point(surface_obj, centroid)
-            if surface_normal and normal.dot(surface_normal) < 0:
-                normal = -normal
-        return normal
-    return Vector((0, 0, 1))
 
-# Mesh utilities
+    normal = (positions[1] - positions[0]).cross(positions[2] - positions[0])
+    if normal.length == 0:
+        return Vector((0, 0, 1))
+    
+    normal.normalize()
+    if surface_obj and surface_obj.type == 'MESH':
+        surf_n = surface_normal(surface_obj, sum(positions, Vector()) / len(positions))
+        if surf_n and surf_n.length > 0 and normal.dot(surf_n) < 0:
+            normal.negate()
+    return normal
+
+# Mesh and topology utilities
 def opposite_edge(face, edge):
-    """In a quad face, return the edge opposite to the given edge (no shared verts)."""
+    """In a quad face, return the edge opposite to the given edge."""
     for ed in face.edges:
         if ed is edge:
             continue
@@ -202,7 +191,7 @@ def find_islands(mesh_obj):
         queue = [i]
         visited[i] = True
         while queue:
-            u = queue.pop(0)  # Use BFS, not DFS
+            u = queue.pop(0)
             comp.add(u)
             for v in adj[u]:
                 if not visited[v]:
@@ -210,7 +199,7 @@ def find_islands(mesh_obj):
                     queue.append(v)
         islands.append(comp)
     return islands
-def find_boundary_loops(bm, allowed_idx=None):
+def boundary_loops(bm, allowed_idx=None):
     """Finds all distinct boundary loops in a BMesh, returning sets of vertex indices."""
     bm.verts.ensure_lookup_table()
     bm.edges.ensure_lookup_table()
@@ -239,56 +228,21 @@ def find_boundary_loops(bm, allowed_idx=None):
                     stack.append(j)
         loops.append(comp)
     return loops
-def _closest_point_on_surface_world(obj, world_point):
-    """Return (hit_world, world_normal) using evaluated object; falls back to BVH if needed."""
+def closest_point(obj, world_point):
+    """Return (hit_world, world_normal)"""
     if not obj or obj.type != 'MESH':
         return None, None
     depsgraph = bpy.context.evaluated_depsgraph_get()
     obj_eval = obj.evaluated_get(depsgraph)
     mat = obj_eval.matrix_world
     inv = mat.inverted()
-    # Use the evaluated API method
     ok, loc, normal, *_ = obj_eval.closest_point_on_mesh(inv @ world_point)
-    if ok:
-        hit_world = mat @ loc
-        world_normal = (mat.to_3x3() @ normal).normalized()
-        return hit_world, world_normal
-    # Fallback to BVHTree from the evaluated mesh
-    me = obj_eval.to_mesh()
-    if me and me.vertices:
-        verts = [v.co for v in me.vertices]
-        polys = [p.vertices[:] for p in me.polygons]
-        bvh = BVHTree.FromPolygons(verts, polys, all_triangles=True)
-        loc, normal, *_ = bvh.find_nearest(inv @ world_point)
-        obj_eval.to_mesh_clear()
-        if loc is not None:
-            hit_world = mat @ loc
-            world_normal = (mat.to_3x3() @ normal).normalized()
-            return hit_world, world_normal
-    else:
-        obj_eval.to_mesh_clear()
-    return None, None
-def get_surface_normal_at_point(obj, point):
-    """Calculates the world-space surface normal of an object at a given world-space point."""
-    _, normal = _closest_point_on_surface_world(obj, point)
-    return normal if normal is not None else Vector((0, 0, 1))
-def create_shrinkwrap_points(obj, positions, offset=0.001, subdivisions=2):
-    """Projects a loop of points onto a surface object with an offset."""
-    if not obj or len(positions) < 3:
-        return positions
-    subdivided_positions = subdivide_edges(positions, subdivisions)
-    shrink_points = []
-    for pos in subdivided_positions:
-        if not obj.data or not obj.data.vertices:
-            shrink_points.append(pos)
-            continue
-        hit_world, world_normal = _closest_point_on_surface_world(obj, pos)
-        if hit_world is not None and world_normal is not None:
-            shrink_points.append(hit_world + (world_normal * float(offset)))
-        else:
-            shrink_points.append(pos)
-    return shrink_points
-def subdivide_edges(positions, subdivisions=2):
+    if not ok:
+        return None, None
+    hit_world = mat @ loc
+    world_normal = (mat.to_3x3() @ normal).normalized()
+    return hit_world, world_normal
+def subdiv_edges(positions, subdivisions=2):
     """Interpolates points along the edges of a polygon loop."""
     if len(positions) < 2 or subdivisions <= 1:
         return positions
@@ -301,6 +255,22 @@ def subdivide_edges(positions, subdivisions=2):
             t = j / subdivisions
             subdivided.append(current.lerp(next_pos, t))
     return subdivided
+def snap_points(obj, positions, offset=0.001, subdivisions=2):
+    """Projects a loop of points onto a surface object with an offset."""
+    if not obj or len(positions) < 3:
+        return positions
+    subdivided_positions = subdiv_edges(positions, subdivisions)
+    shrink_points = []
+    for pos in subdivided_positions:
+        if not obj.data or not obj.data.vertices:
+            shrink_points.append(pos)
+            continue
+        hit_world, world_normal = closest_point(obj, pos)
+        if hit_world is not None and world_normal is not None:
+            shrink_points.append(hit_world + (world_normal * float(offset)))
+        else:
+            shrink_points.append(pos)
+    return shrink_points
 def order_ring_from_indices(bm, idx_set):
     """Orders a set of vertex indices into a single loop by walking edges within the set."""
     bm.verts.ensure_lookup_table()
@@ -338,7 +308,7 @@ def hash2(i, j, seed):
     a = (x & 0xFFFF) / 65535.0
     b = ((x >> 16) & 0xFFFF) / 65535.0
     return a, b
-def point_in_triangulated_poly(p, poly_uv, tri_indices):
+def point_inside_poly(p, poly_uv, tri_indices):
     """Checks if a 2D point is inside a pre-triangulated polygon."""
     for (i, j, k) in tri_indices:
 
@@ -351,14 +321,14 @@ def point_in_triangulated_poly(p, poly_uv, tri_indices):
             return True
     return False
 
-# Scene & mesh helpers
-def get_view_settings(context):
+# Bend interpolation utilities
+def get_bend_and_segs(context):
     """Return bend factor and view segments, clamped to valid ranges."""
     scene = context.scene
     bend = max(0.0, min(1.0, getattr(scene, 'strand_bend_factor', 0.0)))
     segs = max(0, getattr(scene, 'strand_view_segments', 0))
     return bend, segs
-def calculate_interpolated_rings(real_rings, bend, segs):
+def interp_rings(real_rings, bend, segs):
     """Create intermediate rings between real rings using Hermite interpolation."""
     if not real_rings or segs <= 0:
         return real_rings
@@ -414,13 +384,31 @@ def calculate_interpolated_rings(real_rings, bend, segs):
     return rings
 
 # Mouse interaction utilities
-def get_surface_object(context):
+def get_surface_obj(context):
     """Return the surface object selected in the UI picker, if valid."""
     target = getattr(context.scene, 'strand_raycast_target', None)
-    return target if target and target.type == 'MESH' and not is_tubegroom_object(target) else None
-def raycast_to_tubegroom(context, mouse_2d):
-    # Raycasts from the mouse cursor to the visible TubeGroom mesh, with a proximity fallback.
-    tg_object = geometry.get_or_create_tubegroom_object(context, allow_create=False)
+    return target if target and target.type == 'MESH' and not tubegroom_object(target) else None
+def ray_surface(context, mouse_2d, obj, avoid_tg=True):
+    """Perform raycast from mouse to surface object."""
+    if not obj:
+        return None
+    if avoid_tg:
+        # Check if ray hits TubeGroom object first
+        tg_hit, _ = ray_tg(context, mouse_2d)
+        if tg_hit:
+            return None  # Ray hits TubeGroom, don't hit surface
+    ray_origin = view3d_utils.region_2d_to_origin_3d(context.region, context.region_data, mouse_2d)
+    ray_direction = view3d_utils.region_2d_to_vector_3d(context.region, context.region_data, mouse_2d)
+    if not ray_origin or not ray_direction:
+        return None
+    matrix_inv = obj.matrix_world.inverted()
+    success, hit_loc, *_ = obj.ray_cast(
+        matrix_inv @ ray_origin,
+        (matrix_inv.to_3x3() @ ray_direction).normalized(),
+    )
+    return obj.matrix_world @ hit_loc if success else None
+def ray_tg(context, mouse_2d):
+    tg_object = geometry.get_tg_obj(context, allow_create=False)
     if not tg_object or not tg_object.data.vertices:
         return None, None
     ray_origin = view3d_utils.region_2d_to_origin_3d(context.region, context.region_data, mouse_2d)
@@ -428,103 +416,74 @@ def raycast_to_tubegroom(context, mouse_2d):
     if not ray_origin or not ray_direction:
         return None, None
     matrix_inv = tg_object.matrix_world.inverted()
-    success, hit_loc, _, face_idx = tg_object.ray_cast(matrix_inv @ ray_origin, (matrix_inv.to_3x3() @ ray_direction).normalized())
+    success, hit_loc, _, face_idx = tg_object.ray_cast(
+        matrix_inv @ ray_origin,
+        (matrix_inv.to_3x3() @ ray_direction).normalized()
+    )
     if success:
         return tg_object, {'hit_loc': hit_loc, 'face_idx': face_idx}
-    mesh = tg_object.data
-    if not mesh.edges:
-        return None, None
-    min_dist_sq = 4096
-    closest_edge_info = None
-    world_mat = tg_object.matrix_world
-    mouse_vec = Vector(mouse_2d)
-    verts_2d = {i: v2d for i, vert in enumerate(mesh.vertices) if (v2d := view3d_utils.location_3d_to_region_2d(context.region, context.region_data, world_mat @ vert.co))}
-    for edge in mesh.edges:
-        v1_2d, v2_2d = verts_2d.get(edge.vertices[0]), verts_2d.get(edge.vertices[1])
-        if v1_2d and v2_2d and (dist_sq := point_to_line_distance_2d_sq(mouse_2d, v1_2d, v2_2d)) < min_dist_sq:
-            min_dist_sq = dist_sq
-            closest_edge_info = {'edge': edge, 'v1_2d': v1_2d, 'v2_2d': v2_2d}
-    if not closest_edge_info:
-        return None, None
-    edge = closest_edge_info['edge']
-    best_face_idx = min((face for face in mesh.polygons if edge.key in face.edge_keys), 
-                        key=lambda f: (c2d := view3d_utils.location_3d_to_region_2d(context.region, context.region_data, world_mat @ f.center)) and (c2d - mouse_vec).length_squared or float('inf'), 
-                        default=None)
-    if not best_face_idx:
-        return None, None
-    v1_world = world_mat @ mesh.vertices[edge.vertices[0]].co
-    v2_world = world_mat @ mesh.vertices[edge.vertices[1]].co
-    v1_2d, v2_2d = closest_edge_info['v1_2d'], closest_edge_info['v2_2d']
-    c, d = v2_2d.x - v1_2d.x, v2_2d.y - v1_2d.y
-    len_sq = c * c + d * d
-    t = max(0, min(1, ((mouse_vec.x - v1_2d.x) * c + (mouse_vec.y - v1_2d.y) * d) / len_sq)) if len_sq > 1e-9 else 0.5
-    return tg_object, {'hit_loc': matrix_inv @ v1_world.lerp(v2_world, t), 'face_idx': best_face_idx.index}
-def get_point_at_mouse_2d(mouse_2d, context, distance=20, set_highlight=False, restrict_to_root_when_creating=False):
-    # Finds the closest interactive point to the mouse cursor within a pixel distance.
+    return None, None
+
+# Selection utilities
+def get_point(mouse_2d, context, distance=20, set_highlight=False):
+    from . import operators
     distance_sq = distance * distance
     candidate = None
     min_dist_sq = float('inf')
-    surface_obj = get_surface_object(context)
-    root_offset = float(getattr(shared_data, 'root_offset', 0.0))
-    # Check points in existing, saved regions.
-    for region_id, region in shared_data.regions.items():
-        for subregion_id, subregion in region.subregions.items():
-            if restrict_to_root_when_creating and shared_data.selected_region_id == -1 and subregion_id != 1:
-                continue
-            # When dragging, only allow snapping to root points to avoid self-intersection.
-            if shared_data.dragging_point and subregion_id != 1:
-                continue
-            for point_index, point in enumerate(subregion.points):
-                if shared_data.dragging_point and region_id == shared_data.selected_region_id and subregion_id == shared_data.selected_subregion_id and point_index == shared_data.selected_point_index:
+    surface_obj = get_surface_obj(context)
+    root_offset = 0.0
+    # Perform raycast to the TubeGroom mesh to get hit location
+    tg_object, hit_data = ray_tg(context, mouse_2d)
+    hit_loc_world = None
+    if tg_object and hit_data:
+        hit_loc_world = tg_object.matrix_world @ hit_data['hit_loc']
+    # Check points in existing, saved regions using 3D distance to hit location
+    if hit_loc_world:
+        threshold_3d_sq = 0.01 * 0.01  # 1 cm threshold in 3D
+        for region_id, region in geometry.regions.items():
+            for subregion_id, subregion in region.subregions.items():
+                if operators.modal_state.current_region_points and subregion_id != 1:
                     continue
-                disp_pos = point.position
-                if subregion_id == 1 and surface_obj and root_offset >= 0.0 and (hit_n := _closest_point_on_surface_world(surface_obj, point.position)) and hit_n[0] and hit_n[1]:
-                    disp_pos = hit_n[0] + (hit_n[1] * root_offset)
-                if (point_2d := to_2d(disp_pos, context)) and (d_sq := (Vector(mouse_2d) - point_2d).length_squared) < distance_sq and d_sq < min_dist_sq:
-                    min_dist_sq = d_sq
-                    candidate = {'rid': region_id, 'sid': subregion_id, 'pidx': point_index, 'pos3d': disp_pos}
-    for j, point_3d in enumerate(shared_data.current_region_points):
-        if shared_data.dragging_point and shared_data.selected_region_id == -1 and shared_data.selected_point_index == j:
+                # When dragging, only allow snapping to root points to avoid self-intersection.
+                if operators.modal_state.dragging_point and subregion_id != 1:
+                    continue
+                for point_index, point in enumerate(subregion.points):
+                    if operators.modal_state.dragging_point and region_id == operators.modal_state.selected_region_id and subregion_id == operators.modal_state.selected_subregion_id and point_index == operators.modal_state.selected_point_index:
+                        continue
+                    disp_pos = point.position
+                    if subregion_id == 1 and surface_obj and root_offset >= 0.0 and (hit_n := closest_point(surface_obj, point.position)) and hit_n[0] and hit_n[1]:
+                        disp_pos = hit_n[0] + (hit_n[1] * root_offset)
+                    d_sq = (disp_pos - hit_loc_world).length_squared
+                    if d_sq < threshold_3d_sq and d_sq < min_dist_sq:
+                        min_dist_sq = d_sq
+                        candidate = {'rid': region_id, 'sid': subregion_id, 'pidx': point_index, 'pos3d': disp_pos}
+    # Check current region points using 2D projection (since they don't have mesh yet)
+    for j, point_3d in enumerate(operators.modal_state.current_region_points):
+        if operators.modal_state.dragging_point and operators.modal_state.selected_region_id == -1 and operators.modal_state.selected_point_index == j:
             continue
         disp_pos = point_3d
-        if surface_obj and root_offset >= 0.0 and (hit_n := _closest_point_on_surface_world(surface_obj, point_3d)) and hit_n[0] and hit_n[1]:
+        if surface_obj and root_offset >= 0.0 and (hit_n := closest_point(surface_obj, point_3d)) and hit_n[0] and hit_n[1]:
             disp_pos = hit_n[0] + (hit_n[1] * root_offset)
-        if (point_2d := to_2d(disp_pos, context)) and (d_sq := (Vector(mouse_2d) - point_2d).length_squared) < distance_sq and d_sq < min_dist_sq:
+        if (point_2d := project_2d(disp_pos, context)) and (d_sq := (Vector(mouse_2d) - point_2d).length_squared) < distance_sq and d_sq < min_dist_sq:
             min_dist_sq = d_sq
             candidate = {'rid': -1, 'sid': -1, 'pidx': j, 'pos3d': disp_pos}
     if not candidate:
         if set_highlight:
-            shared_data.snap_to_existing = None
-        return -1, -1, -1
-    tg_object = geometry.get_or_create_tubegroom_object(context, allow_create=False)
-    if not tg_object or not tg_object.data.vertices:
-        if set_highlight:
-            shared_data.snap_to_existing = candidate['pos3d']
-        return candidate['rid'], candidate['sid'], candidate['pidx']
-    ray_origin = view3d_utils.region_2d_to_origin_3d(context.region, context.region_data, mouse_2d)
-    if not ray_origin:
-        if set_highlight:
-            shared_data.snap_to_existing = None
-        return -1, -1, -1
-    ray_direction = (candidate['pos3d'] - ray_origin).normalized()
-    matrix_inv = tg_object.matrix_world.inverted()
-    success, hit_loc, _, _ = tg_object.ray_cast(matrix_inv @ ray_origin, matrix_inv.to_3x3() @ ray_direction)
-    if success and (tg_object.matrix_world @ hit_loc - ray_origin).length < (candidate['pos3d'] - ray_origin).length - 0.01:
-        if set_highlight:
-            shared_data.snap_to_existing = None
-        return -1, -1, -1
+            operators.modal_state.snap_to_nearest = None
+        return -1, -1, -1, None
+
     if set_highlight:
-        shared_data.snap_to_existing = candidate['pos3d'] if candidate.get('sid') == 1 else None
-    return candidate['rid'], candidate['sid'], candidate['pidx']
-def get_edge_at_mouse_2d_detailed(mouse_2d, context, distance=10):
-    # Finds the closest edge on the TubeGroom mesh and identifies its type (horizontal/vertical).
-    tg_object, hit_data = raycast_to_tubegroom(context, mouse_2d)
+        operators.modal_state.snap_to_nearest = candidate['pos3d']
+
+    return candidate['rid'], candidate['sid'], candidate['pidx'], candidate['pos3d']
+def get_edge(mouse_2d, context, distance=10):
+    tg_object, hit_data = ray_tg(context, mouse_2d)
     if not tg_object or not hit_data:
         return -1, -1, -1, None
     mesh = tg_object.data
     face = mesh.polygons[hit_data['face_idx']]
     hit_loc = hit_data['hit_loc']
-    closest_edge_key = min(face.edge_keys, key=lambda ek: point_segment_distance_squared_3d(hit_loc, mesh.vertices[ek[0]].co, mesh.vertices[ek[1]].co), default=None)
+    closest_edge_key = min(face.edge_keys, key=lambda ek: dist2_seg3(hit_loc, mesh.vertices[ek[0]].co, mesh.vertices[ek[1]].co), default=None)
     if not closest_edge_key:
         return -1, -1, -1, None
     # Project that 3D edge to 2D and check distance to the mouse.
@@ -534,7 +493,7 @@ def get_edge_at_mouse_2d_detailed(mouse_2d, context, distance=10):
     v2_2d = view3d_utils.location_3d_to_region_2d(context.region, context.region_data, v2_world)
     if not v1_2d or not v2_2d:
         return -1, -1, -1, None
-    dist_2d_sq = point_to_line_distance_2d_sq(mouse_2d, v1_2d, v2_2d)
+    dist_2d_sq = dist2_seg2(mouse_2d, v1_2d, v2_2d)
     if dist_2d_sq > distance * distance:
         return -1, -1, -1, None
     # If close enough, extract the region/subregion/point IDs from the edge's vertices
@@ -549,13 +508,12 @@ def get_edge_at_mouse_2d_detailed(mouse_2d, context, distance=10):
     if rid1 != rid2 or sid1 != sid2 or rid1 <= 0 or sid1 <= 0:
         return -1, -1, -1, None
     rid, sid = rid1, sid1
-    region = shared_data.regions.get(rid)
+    region = geometry.regions.get(rid)
     if not region:
         return -1, -1, -1, None
     subregion = region.subregions.get(sid)
     if not subregion:
         return -1, -1, -1, None
-    # Find point indices by matching vertex coordinates to the subregion's points.
     v1_co = tg_object.matrix_world @ mesh.vertices[v_idx1].co
     v2_co = tg_object.matrix_world @ mesh.vertices[v_idx2].co
     pidx1, pidx2 = -1, -1
@@ -571,9 +529,8 @@ def get_edge_at_mouse_2d_detailed(mouse_2d, context, distance=10):
     n_points = len(subregion.points)
     edge_idx = min(pidx1, pidx2) if abs(pidx1 - pidx2) == 1 else (n_points - 1 if (pidx1 == 0 and pidx2 == n_points - 1) or (pidx2 == 0 and pidx1 == n_points - 1) else -1)
     return (rid, sid, edge_idx, 'horizontal') if edge_idx != -1 else (-1, -1, -1, None)
-def get_region_at_mouse_2d(mouse_2d, context):
-    # Finds the region and subregion IDs of the face under the mouse cursor.
-    tg_object, hit_data = raycast_to_tubegroom(context, mouse_2d)
+def get_region(mouse_2d, context):
+    tg_object, hit_data = ray_tg(context, mouse_2d)
     if not tg_object or not hit_data:
         return -1, -1, -1
     mesh = tg_object.data
@@ -615,9 +572,9 @@ def get_region_at_mouse_2d(mouse_2d, context):
             return rid, sid, sid
         return rid, min(positive_sids), max(positive_sids)
     return -1, -1, -1
-def is_subregion_small_on_screen(region_id, subregion_id, context, threshold=50):
+def get_region_collapsed(region_id, subregion_id, context, threshold=50):
     # Checks if a subregion's 2D bounding box is smaller than a pixel threshold.
-    region = shared_data.regions.get(region_id)
+    region = geometry.regions.get(region_id)
     if not region:
         return False
     subregion = region.subregions.get(subregion_id)
@@ -627,7 +584,7 @@ def is_subregion_small_on_screen(region_id, subregion_id, context, threshold=50)
     if not positions:
         return False
     # Project all points to 2D with single comprehension
-    points_2d = [p2d for p in positions if (p2d := to_2d(p, context)) is not None]
+    points_2d = [p2d for p in positions if (p2d := project_2d(p, context)) is not None]
     if len(points_2d) < 2:
         return True
     xs = [p.x for p in points_2d]
@@ -636,28 +593,55 @@ def is_subregion_small_on_screen(region_id, subregion_id, context, threshold=50)
     min_y, max_y = min(ys), max(ys)
     diagonal_sq = (max_x - min_x)**2 + (max_y - min_y)**2
     return diagonal_sq < threshold * threshold
-def handle_mouse_preview(context, event):
-    # Manages visual previews for new points on the surface and snapping.
+def mouse_preview(context, event):
+    """Manages visual previews for new points on the surface and snapping."""
+    from . import operators
+    from mathutils import Vector
+    state = operators.modal_state
+
     mouse_2d = (event.mouse_region_x, event.mouse_region_y)
-    is_creating = bool(shared_data.current_region_points)
-    shared_data.temp_point = None
-    shared_data.snap_to_first = False
-    shared_data.snap_to_existing = None
-    if is_creating and len(shared_data.current_region_points) >= 3 and (first_2d := to_2d(shared_data.current_region_points[0], context)) and (Vector(mouse_2d) - Vector(first_2d)).length < 20:
-        shared_data.snap_to_first = True
-        shared_data.temp_point = shared_data.current_region_points[0]
-        return
-    get_point_at_mouse_2d(mouse_2d, context, 15, True, restrict_to_root_when_creating=is_creating)
-    if shared_data.snap_to_existing:
-        shared_data.temp_point = shared_data.snap_to_existing
-        return
-    if (base_obj := get_surface_object(context)) and base_obj.data and base_obj.data.vertices and (ray_origin := view3d_utils.region_2d_to_origin_3d(context.region, context.region_data, mouse_2d)) and (ray_direction := view3d_utils.region_2d_to_vector_3d(context.region, context.region_data, mouse_2d)):
-        matrix_inv = base_obj.matrix_world.inverted()
-        success, hit_location, *_ = base_obj.ray_cast(matrix_inv @ ray_origin, (matrix_inv.to_3x3() @ ray_direction).normalized())
-        if success:
-            shared_data.temp_point = base_obj.matrix_world @ hit_location
+
+    state.temp_point = None
+    state.snap_target = None
+    state.snap_to_nearest = None
+    
+    current_pts = state.current_region_points
+    if len(current_pts) >= 3:
+        first_2d = project_2d(current_pts[0], context)
+        if first_2d and (Vector(mouse_2d) - Vector(first_2d)).length < 20:
+            state.snap_target = current_pts[0]
+            state.temp_point = Vector(current_pts[0])
+
+    rid, sid, pidx, nearest_pos = get_point(mouse_2d, context, 15, True)
+    if nearest_pos:
+        state.temp_point = Vector(nearest_pos)
+
+    base_obj = get_surface_obj(context)
+    if base_obj and base_obj.data.vertices:
+        # Check if ray hits TubeGroom object first
+        tg_hit, _ = ray_tg(context, mouse_2d)
+        if not tg_hit:  # Only raycast to surface if no TubeGroom hit
+            ray_origin = view3d_utils.region_2d_to_origin_3d(
+                context.region, context.region_data, mouse_2d
+            )
+            ray_dir = view3d_utils.region_2d_to_vector_3d(
+                context.region, context.region_data, mouse_2d
+            )
+
+            if ray_origin and ray_dir:
+                inv = base_obj.matrix_world.inverted()
+                success, hit_location, *_ = base_obj.ray_cast(
+                    inv @ ray_origin,
+                    (inv.to_3x3() @ ray_dir).normalized()
+                )
+
+                if success and state.temp_point is None:
+                    state.temp_point = base_obj.matrix_world @ hit_location
+                
     context.area.tag_redraw()
-def set_mesh_attribute(mesh, attr_name, attr_type, domain, values):
+
+# Mesh attribute utilities
+def update_attr(mesh, attr_name, attr_type, domain, values):
     """Create or update a mesh attribute."""
     if not values:
         return

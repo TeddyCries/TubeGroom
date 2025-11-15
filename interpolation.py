@@ -1,20 +1,27 @@
 import math
 import bpy
 from mathutils import Vector
-from . import core as shared_data, utils
-from .core import Face
+from . import utils, geometry
 
-EPS = 1e-9
+# Local variables for interpolation
+tubegroom_data = None
+curves_signature = {}
 
 # Face primitive
-def tubegroom_default_radius():
-    val = getattr(shared_data, 'poisson_radius', None)
-    if val is not None:
-        return float(val)
-    return float(getattr(bpy.context.scene, 'strand_poisson_radius', 0.02))
+class Face:
+    def __init__(self, subregion_id, center, normal, tangent, bitangent, region_positions):
+        self.subregion_id = subregion_id
+        self.center = center
+        self.normal = normal
+        self.tangent = tangent
+        self.bitangent = bitangent
+        self.region_positions = region_positions
+        self.tri_indices = None
+
+# Face primitive
 def tubegroom_system_create(radius=None):
     return {
-        'radius': float(radius) if radius is not None else tubegroom_default_radius(),
+        'radius': float(radius) if radius is not None else 0.02,
         'curves': [],
         'face_topology': {},
         'region_base': {},
@@ -26,10 +33,10 @@ def tubegroom_build_face(sub_id, positions):
     v1 = positions[1] - positions[0]
     v2 = positions[2] - positions[0]
     n = v1.cross(v2)
-    n = n.normalized() if n.length > EPS else Vector((0, 0, 1))
+    n = n.normalized() if n.length > 1e-9 else Vector((0, 0, 1))
     t = Vector((1, 0, 0))
     b = n.cross(t)
-    if b.length < EPS:
+    if b.length < 1e-9:
         b = Vector((0, 1, 0))
     return Face(sub_id, center, n, t, b, positions)
 def tubegroom_ensure_root_frame(base, pts, center):
@@ -46,7 +53,7 @@ def tubegroom_ensure_root_frame(base, pts, center):
     base['root_frame'] = (t, b, n, center.copy())
     return base['root_frame']
 def tubegroom_analyze_region_topology(system, region_id):
-    region = shared_data.regions.get(region_id)
+    region = geometry.regions.get(region_id)
     if not region:
         return []
     faces = [tubegroom_build_face(sub_id, pos) for sub_id, sub in region.subregions.items() if len(pos := sub.get_positions()) >= 3]
@@ -59,7 +66,7 @@ def tubegroom_analyze_region_topology(system, region_id):
     root_uv = [((p - c).dot(t), (p - c).dot(b)) for p in root_face.region_positions]
     base['root_uv'] = root_uv
     base['n_points'] = len(root_uv)
-    tri_idx = utils.triangulate_face(root_uv)
+    tri_idx = utils.tri_face(root_uv)
     if not tri_idx:
         return []
     base['tri_indices'] = tri_idx
@@ -96,7 +103,7 @@ def tubegroom_poisson_disk_hashgrid(poly_uv, tri_indices, radius, seed):
             a, b = utils.hash2(i, j, seed)
             px = minx + (i - ix0 + a) * cs
             py = miny + (j - iy0 + b) * cs
-            if not utils.point_in_triangulated_poly((px, py), poly_uv, tri_indices):
+            if not utils.point_inside_poly((px, py), poly_uv, tri_indices):
                 continue
             too_close = False
             for di, dj in offsets:
@@ -114,7 +121,7 @@ def tubegroom_uv_sample_root(base, radius, seed):
         return []
     return tubegroom_poisson_disk_hashgrid(poly_uv, tri_indices, radius, seed)
 def tubegroom_generate_curves_for_region(system, region_id):
-    region = shared_data.regions.get(region_id)
+    region = geometry.regions.get(region_id)
     if not region:
         return
     base = system['region_base'].setdefault(region_id, {})
@@ -125,60 +132,94 @@ def tubegroom_generate_curves_for_region(system, region_id):
     faces_by_id = {f.subregion_id: f for f in faces}
     sub_ids = sorted(region.subregions.keys())
     root = faces_by_id.get(1, faces[0])
-    t, b, n, c = tubegroom_ensure_root_frame(base, root.region_positions, root.center)
+    
     geom_sig = tuple(p.to_tuple(5) for p in root.region_positions)
     if base.get('geom_sig') != geom_sig or base.get('n_points') != len(root.region_positions):
+        t, b, n, c = tubegroom_ensure_root_frame(base, root.region_positions, root.center)
         root_uv = [((p - c).dot(t), (p - c).dot(b)) for p in root.region_positions]
         base.update({'root_uv': root_uv, 'n_points': len(root_uv), 'geom_sig': geom_sig})
-        tri_idx = utils.triangulate_face(root_uv)
+        tri_idx = utils.tri_face(root_uv)
         if not tri_idx:
             return
         base['tri_indices'] = tri_idx
         base.pop('uv_pts_abs', None)
+    else:
+        t, b, n, c = base['root_frame']
+    
     n_points = base['n_points']
     for f in faces:
         if len(f.region_positions) == n_points:
-            f.reference_vertices2d = base['root_uv']
             f.tri_indices = base['tri_indices']
     system['face_topology'][region_id] = faces
+    
     radius = system['radius']
     seed = system['global_seed'] + 1000 * int(region_id)
-    uv_sig = (len(base['root_uv']), tuple((round(u, 6), round(v, 6)) for (u, v) in base['root_uv']))
-    if base.get('uv_sig') == uv_sig and base.get('last_radius') == radius and 'uv_pts_abs' in base:
-        uv_pts_abs = base['uv_pts_abs']
-    else:
+    
+    # Only regenerate UV points if radius changed
+    if base.get('last_radius') != radius or 'uv_pts_abs' not in base:
         uv_pts_abs = tubegroom_uv_sample_root(base, radius, seed)
-        base.update({'uv_pts_abs': uv_pts_abs, 'uv_sig': uv_sig, 'last_radius': radius})
+        base.update({'uv_pts_abs': uv_pts_abs, 'last_radius': radius})
+    else:
+        uv_pts_abs = base['uv_pts_abs']
+    
     if not uv_pts_abs:
         return
+    
     t_obj = getattr(bpy.context.scene, 'strand_raycast_target', None)
-    surface_obj = t_obj if t_obj and t_obj.type == 'MESH' and not utils.is_tubegroom_object(t_obj) else None
+    surface_obj = t_obj if t_obj and t_obj.type == 'MESH' and not utils.tubegroom_object(t_obj) else None
     proj_cache = {}
+    
     for point_idx, (u_abs, v_abs) in enumerate(uv_pts_abs):
         curve_points = []
         for sid in sub_ids:
             if not (f := faces_by_id.get(sid)):
                 continue
-            world = f.uv_to_world_abs(u_abs, v_abs)
-            if sid == 1 and surface_obj:
-                key = (round(u_abs, 5), round(v_abs, 5))
-                if key not in proj_cache:
-                    hit, _ = utils._closest_point_on_surface_world(surface_obj, world)
-                    proj_cache[key] = hit if hit else world
-                world = proj_cache[key]
+            
+            if sid == 1:
+                # Root subregion: use original frame + surface projection
+                world = c + (t * u_abs) + (b * v_abs)
+                if surface_obj:
+                    key = (round(u_abs, 5), round(v_abs, 5))
+                    if key not in proj_cache:
+                        hit, _ = utils.closest_point(surface_obj, world)
+                        proj_cache[key] = hit if hit else world
+                    world = proj_cache[key]
+            else:
+                # Non-root subregions: use barycentric interpolation with current positions
+                orig_uv = base['root_uv']
+                if len(orig_uv) == len(f.region_positions) and len(orig_uv) >= 3:
+                    # Find barycentric coordinates of UV point in original triangle space
+                    tri_indices = base['tri_indices']
+                    world = None
+                    
+                    # Check each triangle for the point
+                    for tri in tri_indices:
+                        if len(tri) == 3:
+                            i0, i1, i2 = tri
+                            if i0 < len(orig_uv) and i1 < len(orig_uv) and i2 < len(orig_uv):
+                                p0, p1, p2 = orig_uv[i0], orig_uv[i1], orig_uv[i2]
+                                w0, w1, w2, inside = utils.barycentric((u_abs, v_abs), p0, p1, p2)
+                                
+                                if inside and i0 < len(f.region_positions) and i1 < len(f.region_positions) and i2 < len(f.region_positions):
+                                    # Interpolate using current face positions
+                                    v0, v1, v2 = f.region_positions[i0], f.region_positions[i1], f.region_positions[i2]
+                                    world = v0 * w0 + v1 * w1 + v2 * w2
+                                    break
+                                
             curve_points.append(world)
+        
         if curve_points:
             system['curves'].append({'stream_id': (region_id, point_idx), 'region_id': region_id, 'point_index': point_idx, 'points': curve_points})
 def tubegroom_generate_all_curves(system):
     system['curves'] = []
-    for rid in sorted(shared_data.regions.keys(), key=lambda r: (int(r) if str(r).isdigit() else float('inf'), str(r))):
+    for rid in sorted(geometry.regions.keys(), key=lambda r: (int(r) if str(r).isdigit() else float('inf'), str(r))):
         tubegroom_analyze_region_topology(system, rid)
         tubegroom_generate_curves_for_region(system, rid)
         guide = main_guide_curve(system, rid)
         if guide:
             system['curves'].append(guide)
     system['curves'].sort(key=lambda c: (int(c['region_id']) if str(c['region_id']).isdigit() else float('inf'), str(c['region_id']), c.get('point_index', 0)))
-    _update_curves_map(system)
+    update_curves_map(system)
     return system['curves']
 def tubegroom_generate_curves_for_region_cached(system, region_id):
     tubegroom_analyze_region_topology(system, region_id)
@@ -188,8 +229,8 @@ def tubegroom_generate_curves_for_region_cached(system, region_id):
     if guide:
         system['curves'].append(guide)
     system['curves'].sort(key=lambda c: (int(c.get('region_id')) if str(c.get('region_id')).isdigit() else float('inf'), str(c.get('region_id')), c.get('point_index', 0)))
-    _update_curves_map(system)
-def _update_curves_map(system):
+    update_curves_map(system)
+def update_curves_map(system):
     if not system or 'curves' not in system:
         system['curves_map'] = {}
         return
@@ -226,7 +267,8 @@ def build_curves_object_from_system(base_name, system):
     old_data = obj.data if obj else None
     new_sizes = [len(c['points']) for c in streams]
     curr_sig = tuple(sorted([(s.get('region_id'), len(s['points'])) for s in streams]))
-    sig_map = getattr(shared_data, 'curves_signature', {}) or {}
+    global curves_signature
+    sig_map = curves_signature
     prev_sig = sig_map.get(name_obj)
     topology_changed = (prev_sig != curr_sig)
     if not topology_changed and old_data and hasattr(old_data, 'curves') and len(old_data.curves) == len(new_sizes):
@@ -241,7 +283,7 @@ def build_curves_object_from_system(base_name, system):
             if hasattr(old_data, 'update_tag'):
                 old_data.update_tag()
             return obj
-    _update_curves_map(system)
+    update_curves_map(system)
     curves_db = bpy.data.hair_curves
     new_data = curves_db.new(name=name_obj + "_data_tmp")
     if streams:
@@ -263,9 +305,7 @@ def build_curves_object_from_system(base_name, system):
         for mat in old_data.materials:
             if mat:
                 new_data.materials.append(mat)
-    if not hasattr(shared_data, 'curves_signature'):
-        shared_data.curves_signature = {}
-    shared_data.curves_signature[name_obj] = curr_sig
+    curves_signature[name_obj] = curr_sig
     if obj is None:
         obj = bpy.data.objects.new(name_obj, new_data)
         if hasattr(bpy.context.scene, 'collection'):
@@ -287,49 +327,68 @@ def build_curves_object_from_system(base_name, system):
         
     return obj
 def generate_tubegroom_interpolation():
-    if not shared_data.regions:
+    global tubegroom_data
+    if not geometry.regions:
         system = tubegroom_system_create()
-        shared_data.tubegroom_data = system
+        tubegroom_data = system
         return system
-    r = getattr(shared_data, 'poisson_radius', None)
-    if r is None and hasattr(bpy.context.scene, 'strand_poisson_radius'):
-        r = float(getattr(bpy.context.scene, 'strand_poisson_radius'))
-    if r is None:
-        r = 0.02
-    sys_prev = getattr(shared_data, 'tubegroom_data', None)
-    if isinstance(sys_prev, dict) and 'curves' in sys_prev:
-        sys_prev['radius'] = float(r)
-        tubegroom_generate_all_curves(sys_prev)
-        return sys_prev
-    system = tubegroom_system_create(radius=float(r))
+    
+    current_radius = float(getattr(bpy.context.scene, 'strand_poisson_radius', 0.02))
+    
+    if isinstance(tubegroom_data, dict) and 'curves' in tubegroom_data:
+        tubegroom_data['radius'] = current_radius
+        old_radius = tubegroom_data.get('last_global_radius')
+        if old_radius is None or abs(old_radius - current_radius) > 1e-6:
+            tubegroom_data['last_global_radius'] = current_radius
+            for base in tubegroom_data.get('region_base', {}).values():
+                base.pop('uv_pts_abs', None)
+                base.pop('last_radius', None)
+        tubegroom_generate_all_curves(tubegroom_data)
+        return tubegroom_data
+    
+    # Create new system
+    system = tubegroom_system_create(radius=current_radius)
+    system['last_global_radius'] = current_radius
     tubegroom_generate_all_curves(system)
-    shared_data.tubegroom_data = system
+    tubegroom_data = system
     return system
 
 # Interpolation management functions
 def update_tubegroom_interpolation(context, region_id=None, update_topology=False):
     if not getattr(context.scene, 'tubegroom_curves_enabled', False):
         return
+    
+    global tubegroom_data
+    base_obj = geometry.get_tg_obj(context, allow_create=False)
+    if not base_obj:
+        return
+    
+    base_name = utils.get_base_name(base_obj)
+    if not base_name:
+        return
+    
+    if not geometry.regions:
+        tubegroom_data = None
+        system = tubegroom_system_create()
+        build_curves_object_from_system(base_name, system)
+        return
+    
     if not getattr(context.scene, 'strand_interpolation_enabled', False):
         return
-    if not shared_data.regions:
-        shared_data.tubegroom_data = None
-        from . import geometry
-        base_obj = geometry.get_or_create_tubegroom_object(context, allow_create=False)
-        if base_obj:
-            base_name = utils.get_base_name_from_obj(base_obj)
-            if base_name:
-                system = tubegroom_system_create()
-                build_curves_object_from_system(base_name, system)
-        if hasattr(shared_data, 'curves_signature'):
-            shared_data.curves_signature.pop(f"CRV_{utils.get_base_name_from_obj(base_obj)}" if base_obj else None, None)
-        return
-    system = shared_data.tubegroom_data or generate_tubegroom_interpolation()
+    
+    system = tubegroom_data or generate_tubegroom_interpolation()
     if not isinstance(system, dict):
         system = generate_tubegroom_interpolation()
     
+    current_radius = float(getattr(context.scene, 'strand_poisson_radius', 0.02))
+    if system.get('radius') != current_radius:
+        system['radius'] = current_radius
+        for base in system.get('region_base', {}).values():
+            base.pop('uv_pts_abs', None)
+            base.pop('last_radius', None)
+    
     if region_id is None or update_topology:
-        existing_region_ids = set(shared_data.regions.keys())
+        existing_region_ids = set(geometry.regions.keys())
         for rid in list(system.get('face_topology', {}).keys()):
             if rid not in existing_region_ids:
                 system['face_topology'].pop(rid, None)
@@ -339,30 +398,20 @@ def update_tubegroom_interpolation(context, region_id=None, update_topology=Fals
         tubegroom_generate_all_curves(system)
     else:
         tubegroom_generate_curves_for_region_cached(system, region_id)
-    shared_data.tubegroom_data = system
-    from . import geometry
     
-    base_obj = geometry.get_or_create_tubegroom_object(context, allow_create=False)
-    if not base_obj:
-        return
-    
-    base_name = utils.get_base_name_from_obj(base_obj)
-    if not base_name:
-        return
-    
+    tubegroom_data = system
     curves_obj = build_curves_object_from_system(base_name, system)
     if curves_obj:
-        curves_obj.show_in_front = True
+        live_enabled = getattr(context.scene, 'strand_interpolation_enabled', False)
+        curves_obj.show_in_front = live_enabled
 def rebuild_regions_from_merged_mesh(obj):
     if not obj or obj.type != 'MESH':
         return False
-    scenes = getattr(obj, 'users_scene', None)
-    scene = scenes[0] if scenes else None
-    shared_data.set_history_owner(obj, scene)
     mesh = obj.data
     if not all(attr in mesh.attributes for attr in ['region_id', 'subregion_id']):
         return False
-    shared_data.reset_all_data(clear_history=False)
+    geometry.regions.clear()
+    geometry.next_region_id = 1
     from collections import defaultdict
     verts_by_subregion = defaultdict(list)
     rid_attr = mesh.attributes['region_id'].data
@@ -372,7 +421,6 @@ def rebuild_regions_from_merged_mesh(obj):
         sid = sid_attr[i].value
         if rid > 0 and sid > 0:
             verts_by_subregion[(rid, sid)].append(i)
-    # Step 2: For each subregion, sort vertices by walking the edges
     sorted_points_by_subregion = {}
     num_verts = len(mesh.vertices)
     adj_list = [[] for _ in range(num_verts)]
@@ -410,7 +458,6 @@ def rebuild_regions_from_merged_mesh(obj):
                 matrix @ mesh.vertices[v_idx].co
                 for v_idx in ordered_indices
             ]
-    # Step 3: Rebuild the core.Region and core.Subregion objects
     temp_regions = {}
     for (rid, sid), points in sorted_points_by_subregion.items():
         if rid not in temp_regions:
@@ -420,17 +467,17 @@ def rebuild_regions_from_merged_mesh(obj):
     for rid, region_data in temp_regions.items():
         if rid > max_rid:
             max_rid = rid
-        region = shared_data.Region(rid, rid - 1)
+        region = geometry.Region(rid, rid)
         max_sid = 0
         for sid, points in sorted(region_data.items()):
             if sid > max_sid:
                 max_sid = sid
-            subregion = shared_data.Subregion(rid, sid)
+            subregion = geometry.Subregion(rid, sid)
             for pos in points:
                 subregion.add_point(pos)
             region.subregions[sid] = subregion
         region.next_subregion_id = max_sid + 1
-        shared_data.regions[rid] = region
-    shared_data.next_region_id = max_rid + 1
-    shared_data.current_region_color_index = max_rid
-    return len(shared_data.regions) > 0
+        geometry.regions[rid] = region
+    geometry.next_region_id = max_rid + 1
+    # Color index managed internally
+    return len(geometry.regions) > 0
