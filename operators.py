@@ -835,7 +835,7 @@ def convert_mesh_object_to_tubegroom(context, mesh_obj, target_obj=None):
         geometry.next_region_id += 1
 
     geometry.update_mesh_date(context)
-    if context.scene.tubegroom_curves_enabled:
+    if context.scene.strand_curves_enabled:
         base_name = utils.get_base_name(tg_obj)
         from . import interpolation
         system = interpolation.generate_interpolation()

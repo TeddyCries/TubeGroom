@@ -51,7 +51,7 @@ def refresh_mesh_system(self, context):
 def update_curves_visibility(self, context):
     """Shows/hides and rebuilds the curves object if necessary."""
     from . import interpolation
-    enabled = context.scene.tubegroom_curves_enabled
+    enabled = context.scene.strand_curves_enabled
     base_name = get_base_name_safe(context)
     if base_name:
         curve_names = [f"CRV_{base_name}"]
@@ -68,7 +68,7 @@ def update_curves_visibility(self, context):
             interpolation.build_curves_object(base_name, system)
 def update_live_interpolation(self, context):
     """Toggle live interpolation and trigger an immediate rebuild when enabling."""
-    if not context.scene.tubegroom_curves_enabled:
+    if not context.scene.strand_curves_enabled:
         return
     enable = context.scene.strand_interpolation_enabled
     base_name = get_base_name_safe(context)
@@ -95,7 +95,7 @@ def update_interpolation_params(self, context):
     if abs(scene.strand_density_factor - density) > 1e-6:
         scene.strand_density_factor = density
 
-    if not scene.tubegroom_curves_enabled:
+    if not scene.strand_curves_enabled:
         return
 
     active_obj = context.active_object
@@ -147,8 +147,8 @@ SCENE_PROPERTIES = [
     ('strand_raycast_target', bpy.props.PointerProperty(name="Target Object", description="Object to use as the surface for placing and projecting guides", type=bpy.types.Object, poll=lambda self, obj: obj.type == 'MESH')),
     ('strand_view_segments', bpy.props.IntProperty(name='Resolution', default=8, min=0, max=8, soft_max=8, description='Insert real loops between subregions (0 disables)', update=refresh_mesh_system, options={'HIDDEN'})),
     ('strand_bend_factor', bpy.props.FloatProperty(name='Smooth', default=1.0, min=0.0, max=1.0, subtype='FACTOR', description='Curve only inserted segments between subregions; original subregions stay fixed (0 disables)', update=refresh_mesh_system, options={'HIDDEN'})),
-    ('tubegroom_show_shape_settings', bpy.props.BoolProperty(name="Show Shape Settings", description="Show/hide Cycles hair shape settings", default=True)),
-    ('tubegroom_curves_enabled', bpy.props.BoolProperty(name="Enable Curves Display", description="Enable, show, and allow recalculation of the final curves object", default=True, update=update_curves_visibility)),
+    ('strand_show_shape_settings', bpy.props.BoolProperty(name="Show Shape Settings", description="Show/hide Cycles hair shape settings", default=True)),
+    ('strand_curves_enabled', bpy.props.BoolProperty(name="Enable Curves Display", description="Enable, show, and allow recalculation of the final curves object", default=True, update=update_curves_visibility)),
     ('strand_interpolation_enabled', bpy.props.BoolProperty(name='Enable Live Interpolation', default=False, description='If enabled, interpolation updates while editing', update=update_live_interpolation)),
     ('strand_density_factor', bpy.props.FloatProperty(name="Density", description="Controls the density of interpolated curves. Left is less, right is more.", default=0.5, min=0.0, max=1.0, subtype='FACTOR', update=update_density)),    ('strand_poisson_radius', bpy.props.FloatProperty(name="Radius (UV)", default=0.02, min=1e-5, soft_max=0.5, subtype='DISTANCE', step=1, precision=4, update=update_interpolation_params)),
 ]

@@ -361,7 +361,7 @@ def generate_interpolation():
 
 # Interpolation management functions
 def update_interpolation(context, region_id=None, update_topology=False):
-    if not getattr(context.scene, 'tubegroom_curves_enabled', False):
+    if not getattr(context.scene, 'strand_curves_enabled', False):
         return
     
     global tubegroom_data

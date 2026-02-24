@@ -432,29 +432,43 @@ def get_point(mouse_2d, context, distance=40, set_highlight=False):
     min_dist_sq = float('inf')
     surface_obj = get_surface_obj(context)
     root_offset = 0.0
-    # Perform raycast to the TubeGroom mesh to get hit location
+    
+    # Get camera position for depth checking
+    region = context.region
+    region_data = context.region_data
+    view_matrix = region_data.view_matrix
+    camera_loc = view_matrix.inverted().translation
+    
+    # Get depth from raycast to TubeGroom mesh
     tg_object, hit_data = ray_tg(context, mouse_2d)
-    hit_loc_world = None
+    hit_depth = None
     if tg_object and hit_data:
         hit_loc_world = tg_object.matrix_world @ hit_data['hit_loc']
-    # Check points in existing, saved regions using 3D distance to hit location
-    if hit_loc_world:
-        threshold_3d_sq = 0.01 * 0.01  # 1 cm threshold in 3D
-        for region_id, region in geometry.regions.items():
-            for subregion_id, subregion in region.subregions.items():
-                if operators.modal_state.creation.current_region_points and subregion_id != 1:
+        hit_depth = (hit_loc_world - camera_loc).length
+    
+    # Use 2D projection but respect depth - only select points at or in front of mesh depth
+    for region_id, region in geometry.regions.items():
+        for subregion_id, subregion in region.subregions.items():
+            if operators.modal_state.creation.current_region_points and subregion_id != 1:
+                continue
+            # When dragging, only allow snapping to root points to avoid self-intersection.
+            if operators.modal_state.dragging_point and subregion_id != 1:
+                continue
+            for point_index, point in enumerate(subregion.points):
+                if operators.modal_state.dragging_point and region_id == operators.modal_state.selection.region_id and subregion_id == operators.modal_state.selection.subregion_id and point_index == operators.modal_state.selection.point_index:
                     continue
-                # When dragging, only allow snapping to root points to avoid self-intersection.
-                if operators.modal_state.dragging_point and subregion_id != 1:
+                disp_pos = point.position
+                if subregion_id == 1 and surface_obj and root_offset >= 0.0 and (hit_n := closest_point(surface_obj, point.position)) and hit_n[0] and hit_n[1]:
+                    disp_pos = hit_n[0] + (hit_n[1] * root_offset)
+                
+                # Check depth - only consider points at or in front of mesh
+                point_depth = (disp_pos - camera_loc).length
+                if hit_depth is not None and point_depth > hit_depth + 0.02:  # 2cm tolerance behind mesh
                     continue
-                for point_index, point in enumerate(subregion.points):
-                    if operators.modal_state.dragging_point and region_id == operators.modal_state.selection.region_id and subregion_id == operators.modal_state.selection.subregion_id and point_index == operators.modal_state.selection.point_index:
-                        continue
-                    disp_pos = point.position
-                    if subregion_id == 1 and surface_obj and root_offset >= 0.0 and (hit_n := closest_point(surface_obj, point.position)) and hit_n[0] and hit_n[1]:
-                        disp_pos = hit_n[0] + (hit_n[1] * root_offset)
-                    d_sq = (disp_pos - hit_loc_world).length_squared
-                    if d_sq < threshold_3d_sq and d_sq < min_dist_sq:
+                    
+                if (point_2d := project_2d(disp_pos, context)):
+                    d_sq = (Vector(mouse_2d) - point_2d).length_squared
+                    if d_sq < distance_sq and d_sq < min_dist_sq:
                         min_dist_sq = d_sq
                         candidate = {'rid': region_id, 'sid': subregion_id, 'pidx': point_index, 'pos3d': disp_pos}
     # Check current region points using 2D projection (since they don't have mesh yet)
@@ -467,6 +481,7 @@ def get_point(mouse_2d, context, distance=40, set_highlight=False):
         if (point_2d := project_2d(disp_pos, context)) and (d_sq := (Vector(mouse_2d) - point_2d).length_squared) < distance_sq and d_sq < min_dist_sq:
             min_dist_sq = d_sq
             candidate = {'rid': -1, 'sid': -1, 'pidx': j, 'pos3d': disp_pos}
+    
     if not candidate:
         if set_highlight:
             operators.modal_state.creation.snap_to_nearest = None
@@ -476,7 +491,7 @@ def get_point(mouse_2d, context, distance=40, set_highlight=False):
         operators.modal_state.creation.snap_to_nearest = candidate['pos3d']
 
     return candidate['rid'], candidate['sid'], candidate['pidx'], candidate['pos3d']
-def get_edge(mouse_2d, context, distance=25):
+def get_edge(mouse_2d, context, distance=50):
     tg_object, hit_data = ray_tg(context, mouse_2d)
     if not tg_object or not hit_data:
         return -1, -1, -1, None
@@ -612,7 +627,7 @@ def mouse_preview(context, event):
             creation.snap_target = current_pts[0]
             creation.temp_point = Vector(current_pts[0])
 
-    rid, sid, pidx, nearest_pos = get_point(mouse_2d, context, 15, True)
+    rid, sid, pidx, nearest_pos = get_point(mouse_2d, context, 50, True)
     if nearest_pos:
         creation.temp_point = Vector(nearest_pos)
 

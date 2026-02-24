@@ -45,7 +45,7 @@ class TUBEGROOM_OT_build_curves(bpy.types.Operator):
     bl_description = "Generate the final hair curves object from the TubeGroom guides"
     bl_options = {'REGISTER', 'UNDO'}
     def execute(self, context):
-        if not context.scene.tubegroom_curves_enabled:
+        if not context.scene.strand_curves_enabled:
             self.report({'INFO'}, "Enable curves first")
             return {'CANCELLED'}
         if context.mode == 'EDIT_MESH':
@@ -580,18 +580,18 @@ class TUBEGROOM_PT_interpolation_panel(bpy.types.Panel):
         scene = context.scene
         box = layout.box()
         # Main toggle for the curves functionality
-        box.prop(scene, 'tubegroom_curves_enabled', text='Enable Curves Display')
+        box.prop(scene, 'strand_curves_enabled', text='Enable Curves Display')
         # Sub-layout enabled when the main toggle is on
         sub_box = box.box()
-        sub_box.active = scene.tubegroom_curves_enabled
+        sub_box.active = scene.strand_curves_enabled
         sub_box.prop(scene, 'strand_interpolation_enabled', text='Live Updates')
         sub_box.prop(scene, 'strand_density_factor', text='Density')
         # Shape settings collapsible section
         row = sub_box.row()
-        row.prop(scene, "tubegroom_show_shape_settings", text=" Shape",
+        row.prop(scene, "strand_show_shape_settings", text=" Shape",
                  icon='TRIA_RIGHT' if not scene.tubegroom_show_shape_settings else 'TRIA_DOWN',
                  emboss=False)
-        if scene.tubegroom_show_shape_settings:
+        if scene.strand_show_shape_settings:
             shape_box = sub_box.box()
             # These controls mimic the old hair display settings for the curves object
             shape_box.label(text="Viewport Display")
