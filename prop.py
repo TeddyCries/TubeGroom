@@ -15,6 +15,9 @@ def calculate_log_ranges():
     return math.log(0.001), math.log(0.5)
 
 # Root offset property update functions
+def get_root_offset(self):
+    """Expose root offset in millimeters while storing in meters."""
+    return self.strand_root_offset * 1000.0
 def set_root_offset(self, value):
     """Store root offset in meters while exposing millimeters in the UI."""
     meters = max(0.0, min(0.1, float(value) / 1000.0 if isinstance(value, (int, float)) else 0.0))
@@ -39,10 +42,10 @@ def refresh_mesh_system(self, context):
     
     if not geometry.regions and obj.data.vertices:
         from . import interpolation
-        interpolation.rebuild_regions_from_merged_mesh(obj)
+        interpolation.rebuild_regions(obj)
     geometry.update_mesh_date(context)
     from . import interpolation
-    interpolation.update_tubegroom_interpolation(context, None, update_topology=False)
+    interpolation.update_interpolation(context, None, update_topology=False)
 
 # Interpolation property update functions
 def update_curves_visibility(self, context):
@@ -60,9 +63,9 @@ def update_curves_visibility(self, context):
             obj.hide_set(not enabled)
             obj.hide_viewport = not enabled
     if enabled and base_name:
-        system = interpolation.generate_tubegroom_interpolation()
+        system = interpolation.generate_interpolation()
         if system:
-            interpolation.build_curves_object_from_system(base_name, system)
+            interpolation.build_curves_object(base_name, system)
 def update_live_interpolation(self, context):
     """Toggle live interpolation and trigger an immediate rebuild when enabling."""
     if not context.scene.tubegroom_curves_enabled:
@@ -74,7 +77,7 @@ def update_live_interpolation(self, context):
     if enable:
         # Build or update curves immediately when enabling live
         from . import interpolation
-        interpolation.update_tubegroom_interpolation(context)
+        interpolation.update_interpolation(context)
     obj = bpy.data.objects.get(f"CRV_{base_name}")
     if obj:
         update_curves_object_color(obj, enable)
@@ -103,11 +106,11 @@ def update_interpolation_params(self, context):
     if not base_name:
         return
 
-    system = interpolation.generate_tubegroom_interpolation()
+    system = interpolation.generate_interpolation()
     if not system:
         return
-        
-    curves_obj = interpolation.build_curves_object_from_system(base_name, system)
+
+    curves_obj = interpolation.build_curves_object(base_name, system)
     if curves_obj:
         live_enabled = scene.strand_interpolation_enabled
         update_curves_object_color(curves_obj, live_enabled)
@@ -139,6 +142,7 @@ SCENE_PROPERTIES = [
         step=0.1,
         precision=3,
         set=set_root_offset,
+        get=get_root_offset
     )),
     ('strand_raycast_target', bpy.props.PointerProperty(name="Target Object", description="Object to use as the surface for placing and projecting guides", type=bpy.types.Object, poll=lambda self, obj: obj.type == 'MESH')),
     ('strand_view_segments', bpy.props.IntProperty(name='Resolution', default=8, min=0, max=8, soft_max=8, description='Insert real loops between subregions (0 disables)', update=refresh_mesh_system, options={'HIDDEN'})),

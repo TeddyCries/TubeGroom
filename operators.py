@@ -7,6 +7,33 @@ from . import utils, geometry
 history = []
 history_index = -1
 
+class SelectionState:
+    def __init__(self):
+        self.region_id = self.subregion_id = -1
+        self.point_index = -1
+
+class CreationState:
+    def __init__(self):
+        # Region creation
+        self.current_region_points = []
+        self.current_region_color_index = None
+        # Snap/preview for creation
+        self.temp_point = None
+        self.snap_target = None
+        self.snap_to_nearest = None
+        # Extrude (creates new subregion)
+        self.extrude_preview_subregion_id = None
+        self.extrude_normal = None
+
+class TransformState:
+    def __init__(self):
+        self.start_mouse_3d = None
+        self.start_mouse_pos = None
+        self.original_position = None
+        self.original_positions = None
+        self.axis = None
+        self.active_subregion = -1
+
 class ModalState:
     def __init__(self):
         # Modal modes
@@ -14,48 +41,43 @@ class ModalState:
         self.scaling_mode = self.rotation_mode = self.move_subregion_mode = False
         self.twist_mode = self.column_drag_mode = False
 
-        # History NO está aquí - es global y persiste
-
-        # Point selection state
-        self.selected_region_id = self.selected_subregion_id = -1
-        self.selected_point_index = -1
-        self.current_region_points = []
-
-        # Drag state
-        self.drag_start_mouse_3d = None
-        self.drag_original_position = None
-        self.temp_point = None
-        self.snap_target = None
-        self.snap_to_first = False
-        self.snap_to_nearest = None
-
-        # Transform operations
-        self.scaling_original_positions = None
-        self.rotation_original_positions = None
-        self.move_subregion_original_positions = None
-        self.twist_original_positions = None
-        self.twist_axis = None
-        self.start_mouse_pos = None
-
-        # Extrusion state
-        self.extrude_preview_subregion_id = None
-        self.extrude_normal = None
-        self.extrude_height = 0.0
-
-        # Column drag state
-        self.column_drag_original_positions = None
-        self.column_drag_active_subregion = -1
-
-        # Color state
-        self.current_region_color = None
-        self.current_region_color_index = None
-
-        # Mouse state
+        # Sub-states
+        self.selection = SelectionState()
+        self.creation = CreationState()
+        self.drag = TransformState()
+        self.scaling = TransformState()
+        self.rotation = TransformState()
+        self.move_subregion = TransformState()
+        self.twist = TransformState()
+        self.column_drag = TransformState()
+        
+        # UI state
+        self.mouse_was_over_ui = False
+    
+    def reset(self, keep_edit_mode=False):
+        """Reset all state without creating a new instance."""
+        old_edit_mode = self.edit_mode if keep_edit_mode else False
+        
+        # Reset modal modes
+        self.edit_mode = self.dragging_point = self.extrude_mode = False
+        self.scaling_mode = self.rotation_mode = self.move_subregion_mode = False
+        self.twist_mode = self.column_drag_mode = False
+        
+        # Reset sub-states
+        self.selection = SelectionState()
+        self.creation = CreationState()
+        self.drag = TransformState()
+        self.scaling = TransformState()
+        self.rotation = TransformState()
+        self.move_subregion = TransformState()
+        self.twist = TransformState()
+        self.column_drag = TransformState()
+        
+        # Reset UI state
         self.mouse_was_over_ui = False
         
-        # Highlight state
-        self.highlight_region_id = -1
-        self.highlight_subregion_id = -1
+        # Restore edit mode if needed
+        self.edit_mode = old_edit_mode
 
 modal_state = ModalState()
 
@@ -74,7 +96,7 @@ def save_state():
             } for sid, s in r.subregions.items()}
         } for rid, r in geometry.regions.items()},
         'next_region_id': geometry.next_region_id,
-        'current_region_points': [p.copy() for p in modal_state.current_region_points]
+        'current_region_points': [p.copy() for p in modal_state.creation.current_region_points]
     }
     history = history[:history_index + 1]
     history.append(state)
@@ -82,58 +104,44 @@ def save_state():
     if len(history) > 20:
         history.pop(0)
         history_index -= 1
+
+def _restore_state(state):
+    """Helper function to restore regions and modal state from a saved state."""
+    geometry.regions.clear()
+    for rid, rdata in state['regions'].items():
+        region = geometry.Region(rdata['region_id'], rdata['color_index'])
+        region.next_subregion_id = rdata['next_subregion_id']
+        for sid, sdata in rdata['subregions'].items():
+            subregion = geometry.Subregion(sdata['region_id'], sdata['subregion_id'])
+            for pos in sdata['points']:
+                subregion.add_point(pos)
+            region.subregions[sid] = subregion
+        geometry.regions[rid] = region
+    geometry.next_region_id = state['next_region_id']
+    modal_state.creation.current_region_points = [p.copy() for p in state.get('current_region_points', [])]
+    clear_modal_state(keep_edit_mode=True)
+
 def undo_state():
     global history, history_index
     if history_index <= 0 or not modal_state.edit_mode:
         return False
     history_index -= 1
-    state = history[history_index]
-    
-    geometry.regions.clear()
-    for rid, rdata in state['regions'].items():
-        region = geometry.Region(rdata['region_id'], rdata['color_index'])
-        region.next_subregion_id = rdata['next_subregion_id']
-        for sid, sdata in rdata['subregions'].items():
-            subregion = geometry.Subregion(sdata['region_id'], sdata['subregion_id'])
-            for pos in sdata['points']:
-                subregion.add_point(pos)
-            region.subregions[sid] = subregion
-        geometry.regions[rid] = region
-    geometry.next_region_id = state['next_region_id']
-    modal_state.current_region_points = [p.copy() for p in state.get('current_region_points', [])]
-    clear_modal_state(keep_edit_mode=True)
-   
+    _restore_state(history[history_index])
     return True
+
 def redo_state():
     global history, history_index
     if history_index >= len(history) - 1 or not modal_state.edit_mode:
         return False
     history_index += 1
-    state = history[history_index]
-    
-    geometry.regions.clear()
-    for rid, rdata in state['regions'].items():
-        region = geometry.Region(rdata['region_id'], rdata['color_index'])
-        region.next_subregion_id = rdata['next_subregion_id']
-        for sid, sdata in rdata['subregions'].items():
-            subregion = geometry.Subregion(sdata['region_id'], sdata['subregion_id'])
-            for pos in sdata['points']:
-                subregion.add_point(pos)
-            region.subregions[sid] = subregion
-        geometry.regions[rid] = region
-    geometry.next_region_id = state['next_region_id']
-    modal_state.current_region_points = [p.copy() for p in state.get('current_region_points', [])]
-    clear_modal_state(keep_edit_mode=True)
+    _restore_state(history[history_index])
     return True
 
 # Clear modal state
 def clear_modal_state(keep_edit_mode=None):
-    global modal_state
-    
-    # Simply recreate the ModalState instance - clean and maintainable
-    old_edit_mode = modal_state.edit_mode if keep_edit_mode is None else keep_edit_mode
-    modal_state = ModalState()
-    modal_state.edit_mode = old_edit_mode
+    # Reset the existing instance instead of creating a new one
+    # This preserves references to modal_state throughout the codebase
+    modal_state.reset(keep_edit_mode=keep_edit_mode if keep_edit_mode is not None else False)
 def reset_all_data(keep_edit_mode=False, clear_history=False):
     global history, history_index
     geometry.regions.clear()
@@ -149,7 +157,7 @@ def update_geometry(context, region_id=None, update_topology=False):
     """Update mesh and interpolation for regions."""
     geometry.update_mesh_date(context, region_id)
     from . import interpolation
-    interpolation.update_tubegroom_interpolation(context, region_id, update_topology=update_topology)
+    interpolation.update_interpolation(context, region_id, update_topology=update_topology)
 def update_all_geometry(context, update_topology=False):
     """Update merged mesh and interpolation for all regions."""
     update_geometry(context, update_topology=update_topology)
@@ -162,46 +170,44 @@ def rebuild_points_with_insert(subregion, insert_index, position):
     for pos in ordered_points:
         subregion.add_point(pos)
     subregion.touch()
-def collect_subregion_snapshots(region, start_sub_id, hierarchical, compute_pivots=False):
+def collect_subregion_snapshots(region, start_sub_id, hierarchical):
     snapshots = {}
     for sid in sorted(region.subregions.keys()):
         if sid < start_sub_id or (not hierarchical and sid != start_sub_id):
             continue
         sub = region.subregions[sid]
         points = [p.position.copy() for p in sub.points]
-        if points:
-            snapshots[sid] = points
-    return snapshots, None
+        snapshots[sid] = points
+    return snapshots
 
 # Region creation operations
 def add_point(context):
-    if not modal_state.temp_point:
+    if not modal_state.creation.temp_point:
         return 0
-    if not modal_state.current_region_points:
-        modal_state.current_region_color_index = geometry.next_region_id
-    modal_state.current_region_points.append(modal_state.temp_point.copy())
-    modal_state.temp_point = None
-    modal_state.snap_target = None
+    if not modal_state.creation.current_region_points:
+        modal_state.creation.current_region_color_index = geometry.next_region_id
+    modal_state.creation.current_region_points.append(modal_state.creation.temp_point.copy())
+    modal_state.creation.temp_point = None
+    modal_state.creation.snap_target = None
     context.area.tag_redraw()
     save_state()
-    return len(modal_state.current_region_points)
+    return len(modal_state.creation.current_region_points)
 def end_region(context):
-    if len(modal_state.current_region_points) < 3:
+    if len(modal_state.creation.current_region_points) < 3:
         return None
     
     region_id = geometry.next_region_id
     region = geometry.Region(region_id, region_id)
     subregion = region.create_subregion()
     
-    for point_pos in modal_state.current_region_points:
+    for point_pos in modal_state.creation.current_region_points:
         subregion.add_point(point_pos)
 
     geometry.regions[region_id] = region
     geometry.next_region_id += 1
     
     # Usar clear_modal_state() para limpiar variables temporales
-    clear_modal_state()
-    modal_state.edit_mode = True
+    clear_modal_state(keep_edit_mode=True)
     geometry.update_mesh_date(context)
     context.area.tag_redraw()
     save_state()
@@ -243,7 +249,7 @@ def insert_point_edge(context, region_id, subregion_id, edge_index):
     if changed:
         geometry.update_mesh_date(context, region_id)
         from . import interpolation
-        interpolation.update_tubegroom_interpolation(context, region_id, update_topology=True)
+        interpolation.update_interpolation(context, region_id, update_topology=True)
         save_state()
     return changed
 def insert_subregion(context, region_id, subregion_id1, subregion_id2, factor=0.5):
@@ -301,19 +307,20 @@ def insert_subregion(context, region_id, subregion_id1, subregion_id2, factor=0.
     save_state()
     geometry.update_mesh_date(context, region_id)
     from . import interpolation
-    interpolation.update_tubegroom_interpolation(context, region_id, update_topology=True)
+    interpolation.update_interpolation(context, region_id, update_topology=True)
     return True
 def cancel_active_operation(context):
     if any([modal_state.dragging_point, modal_state.move_subregion_mode, modal_state.extrude_mode,
             modal_state.scaling_mode, modal_state.rotation_mode, modal_state.twist_mode]):
+        # Capture the region ID before undo_state() clears it
+        region_to_update = modal_state.selection.region_id
         undo_state()
         clear_modal_state(keep_edit_mode=True)
-        for region_id in geometry.regions.keys():
-            geometry.update_mesh_date(context, region_id)
-        from . import interpolation
-        interpolation.update_tubegroom_interpolation(context, None, update_topology=True)
+        # Only update the region that was being edited, not all regions
+        if region_to_update in geometry.regions:
+            update_geometry(context, region_to_update, update_topology=True)
         return "Operation cancelled"
-    if modal_state.current_region_points:
+    if modal_state.creation.current_region_points:
         # Usar clear_modal_state() para limpiar variables temporales
         clear_modal_state()
         return "Region creation cancelled"
@@ -321,8 +328,8 @@ def cancel_active_operation(context):
 
 # Deletion operations
 def delete_from_current_region(context, point_index):
-    if len(modal_state.current_region_points) > 1:
-        modal_state.current_region_points.pop(point_index)
+    if len(modal_state.creation.current_region_points) > 1:
+        modal_state.creation.current_region_points.pop(point_index)
     else:
         # Usar clear_modal_state() para limpiar variables temporales
         clear_modal_state()
@@ -358,7 +365,8 @@ def delete_subregion(context, region_id, subregion_id):
     region.touch()
     if not region.subregions:
         del geometry.regions[region_id]
-    region.renumber_subregions()
+    else:
+        region.renumber_subregions()
     update_all_geometry(context, update_topology=True)
     context.area.tag_redraw()
     save_state()
@@ -387,16 +395,16 @@ def delete_region(context, region_id):
 def start_drag(context, event, region_id, subregion_id, point_index):
     if region_id == -1 or point_index == -1:
         return False
-    modal_state.selected_region_id = region_id
-    modal_state.selected_subregion_id = subregion_id
-    modal_state.selected_point_index = point_index
+    modal_state.selection.region_id = region_id
+    modal_state.selection.subregion_id = subregion_id
+    modal_state.selection.point_index = point_index
     modal_state.dragging_point = True
     original_pos = geometry.regions[region_id].subregions[subregion_id].points[point_index].position
     initial_3d = view3d_utils.region_2d_to_location_3d(context.region, context.region_data, (event.mouse_region_x, event.mouse_region_y), original_pos)
     if not initial_3d:
         return False
-    modal_state.drag_start_mouse_3d = initial_3d
-    modal_state.drag_original_position = original_pos.copy()
+    modal_state.drag.start_mouse_3d = initial_3d
+    modal_state.drag.original_position = original_pos.copy()
     context.area.tag_redraw()
     return True
 def start_move_column(context, event, region_id, subregion_id, point_index):
@@ -410,95 +418,94 @@ def start_move_column(context, event, region_id, subregion_id, point_index):
         return False
     base_pos = column_orig.get(subregion_id, next(iter(column_orig.values())))
     modal_state.column_drag_mode = True
-    modal_state.column_drag_original_positions = column_orig
-    modal_state.column_drag_active_subregion = subregion_id
-    modal_state.selected_region_id = region_id
-    modal_state.selected_subregion_id = subregion_id
-    modal_state.selected_point_index = point_index
+    modal_state.column_drag.original_positions = column_orig
+    modal_state.column_drag.active_subregion = subregion_id
+    modal_state.selection.region_id = region_id
+    modal_state.selection.subregion_id = subregion_id
+    modal_state.selection.point_index = point_index
     modal_state.dragging_point = True
-    modal_state.drag_original_position = base_pos.copy()
-    modal_state.drag_start_mouse_3d = view3d_utils.region_2d_to_location_3d(context.region, context.region_data, (event.mouse_region_x, event.mouse_region_y), base_pos)
+    modal_state.drag.original_position = base_pos.copy()
+    modal_state.drag.start_mouse_3d = view3d_utils.region_2d_to_location_3d(context.region, context.region_data, (event.mouse_region_x, event.mouse_region_y), base_pos)
     context.area.tag_redraw()
     return True
 def handle_vertex_drag(context, event):
     mouse_2d = (event.mouse_region_x, event.mouse_region_y)
     if modal_state.column_drag_mode:
-        if not modal_state.column_drag_original_positions or modal_state.selected_region_id not in geometry.regions or modal_state.selected_point_index < 0:
+        if not modal_state.column_drag.original_positions or modal_state.selection.region_id not in geometry.regions or modal_state.selection.point_index < 0:
             return
-        region = geometry.regions[modal_state.selected_region_id]
-        base_original = modal_state.column_drag_original_positions.get(modal_state.column_drag_active_subregion, modal_state.drag_original_position)
-        new_position = modal_state.snap_to_nearest or (
-            utils.ray_surface(context, mouse_2d, utils.get_surface_obj(context), avoid_tg=False) if modal_state.column_drag_active_subregion == 1 else
-            base_original + (view3d_utils.region_2d_to_location_3d(context.region, context.region_data, mouse_2d, modal_state.drag_original_position or Vector((0, 0, 0))) - modal_state.drag_start_mouse_3d)
-            if modal_state.drag_start_mouse_3d else None
+        region = geometry.regions[modal_state.selection.region_id]
+        base_original = modal_state.column_drag.original_positions.get(modal_state.column_drag.active_subregion, modal_state.drag.original_position)
+        new_position = modal_state.creation.snap_to_nearest or (
+            utils.ray_surface(context, mouse_2d, utils.get_surface_obj(context), avoid_tg=False) if modal_state.column_drag.active_subregion == 1 else
+            base_original + (view3d_utils.region_2d_to_location_3d(context.region, context.region_data, mouse_2d, modal_state.drag.original_position or Vector((0, 0, 0))) - modal_state.drag.start_mouse_3d)
+            if modal_state.drag.start_mouse_3d else None
         )
         if new_position:
             displacement = new_position - base_original
-            for sid, orig in modal_state.column_drag_original_positions.items():
-                if sid in region.subregions and modal_state.selected_point_index < len(region.subregions[sid].points):
-                    region.subregions[sid].points[modal_state.selected_point_index].position = orig + displacement
+            for sid, orig in modal_state.column_drag.original_positions.items():
+                if sid in region.subregions and modal_state.selection.point_index < len(region.subregions[sid].points):
+                    region.subregions[sid].points[modal_state.selection.point_index].position = orig + displacement
                     region.subregions[sid].touch()
-            update_geometry(context, modal_state.selected_region_id)
+            update_geometry(context, modal_state.selection.region_id)
             context.area.tag_redraw()
         return
     utils.get_point(mouse_2d, context, 15, True)
-    subregion = geometry.regions[modal_state.selected_region_id].subregions[modal_state.selected_subregion_id]
-    if 0 <= modal_state.selected_point_index < len(subregion.points):
-        new_position = modal_state.snap_to_nearest or (
-            utils.ray_surface(context, mouse_2d, utils.get_surface_obj(context), avoid_tg=False) if modal_state.selected_subregion_id == 1 else
-            modal_state.drag_original_position + (view3d_utils.region_2d_to_location_3d(context.region, context.region_data, mouse_2d, modal_state.drag_original_position or Vector((0, 0, 0))) - modal_state.drag_start_mouse_3d)
-            if modal_state.drag_start_mouse_3d else None
+    subregion = geometry.regions[modal_state.selection.region_id].subregions[modal_state.selection.subregion_id]
+    if 0 <= modal_state.selection.point_index < len(subregion.points):
+        new_position = modal_state.creation.snap_to_nearest or (
+            utils.ray_surface(context, mouse_2d, utils.get_surface_obj(context), avoid_tg=False) if modal_state.selection.subregion_id == 1 else
+            modal_state.drag.original_position + (view3d_utils.region_2d_to_location_3d(context.region, context.region_data, mouse_2d, modal_state.drag.original_position or Vector((0, 0, 0))) - modal_state.drag.start_mouse_3d)
+            if modal_state.drag.start_mouse_3d else None
         )
         if new_position:
-            subregion.points[modal_state.selected_point_index].position = new_position
+            subregion.points[modal_state.selection.point_index].position = new_position
             subregion.touch()
-            update_geometry(context, modal_state.selected_region_id)
+            update_geometry(context, modal_state.selection.region_id)
             context.area.tag_redraw()
-def end_drag(context):
-    region_id = modal_state.selected_region_id
-    if region_id in geometry.regions:
-        update_geometry(context, region_id)
+def _end_operation(context, region_id=None):
+    """Helper function to end any modal operation consistently."""
+    target_region_id = region_id if region_id is not None else modal_state.selection.region_id
+    if target_region_id in geometry.regions:
+        update_geometry(context, target_region_id)
     save_state()
-    clear_modal_state()
+    clear_modal_state(keep_edit_mode=True)
     context.area.tag_redraw()
-    return True
+
+def end_drag(context):
+    _end_operation(context)
 
 # Move subregion operation
 def start_move_subregion(region_id, subregion_id, start_mouse_3d, hierarchical=False):
     region = geometry.regions.get(region_id)
     if not region or subregion_id not in region.subregions:
         return False
-    snapshots, _ = collect_subregion_snapshots(region, subregion_id, hierarchical)
+    snapshots = collect_subregion_snapshots(region, subregion_id, hierarchical)
     if subregion_id not in snapshots:
         return False
     modal_state.move_subregion_mode = True
-    modal_state.selected_region_id = region_id
-    modal_state.selected_subregion_id = subregion_id
-    modal_state.move_subregion_original_positions = snapshots
-    modal_state.drag_start_mouse_3d = start_mouse_3d
-    modal_state.drag_original_position = sum(snapshots[subregion_id], Vector()) / len(snapshots[subregion_id])
+    modal_state.selection.region_id = region_id
+    modal_state.selection.subregion_id = subregion_id
+    modal_state.move_subregion.original_positions = snapshots
+    modal_state.drag.start_mouse_3d = start_mouse_3d
+    modal_state.drag.original_position = sum(snapshots[subregion_id], Vector()) / len(snapshots[subregion_id])
     return True
 def handle_move_subregion_mousemove(context, event):
-    if not modal_state.move_subregion_mode or modal_state.selected_region_id not in geometry.regions or not modal_state.move_subregion_original_positions:
+    if not modal_state.move_subregion_mode or modal_state.selection.region_id not in geometry.regions or not modal_state.move_subregion.original_positions:
         return False
-    displacement = view3d_utils.region_2d_to_location_3d(context.region, context.region_data, (event.mouse_region_x, event.mouse_region_y), modal_state.drag_original_position or Vector((0, 0, 0))) - modal_state.drag_start_mouse_3d
-    region = geometry.regions[modal_state.selected_region_id]
-    for sid, originals in modal_state.move_subregion_original_positions.items():
+    displacement = view3d_utils.region_2d_to_location_3d(context.region, context.region_data, (event.mouse_region_x, event.mouse_region_y), modal_state.drag.original_position or Vector((0, 0, 0))) - modal_state.drag.start_mouse_3d
+    region = geometry.regions[modal_state.selection.region_id]
+    for sid, originals in modal_state.move_subregion.original_positions.items():
         if sid in region.subregions:
             for i, orig_pos in enumerate(originals):
                 if i < len(region.subregions[sid].points):
                     region.subregions[sid].points[i].position = orig_pos + displacement
             region.subregions[sid].touch()
-    geometry.update_mesh_date(context, modal_state.selected_region_id)
+    geometry.update_mesh_date(context, modal_state.selection.region_id)
     from . import interpolation
-    interpolation.update_tubegroom_interpolation(context, modal_state.selected_region_id)
+    interpolation.update_interpolation(context, modal_state.selection.region_id)
     return True
 def end_move_subregion(context):
-    if modal_state.selected_region_id in geometry.regions:
-        update_geometry(context, modal_state.selected_region_id)
-    save_state()
-    clear_modal_state()
-    return True
+    _end_operation(context)
 
 # Extrusion operation
 def start_extrusion(context, event):
@@ -513,173 +520,202 @@ def start_extrusion(context, event):
     base_positions = tip_subregion.get_positions()
     if not base_positions:
         return False, None, None, None
-    modal_state.extrude_normal = utils.tip_normal(base_positions, utils.get_surface_obj(context))
+    modal_state.creation.extrude_normal = utils.tip_normal(base_positions, utils.get_surface_obj(context))
     preview_subregion = region_obj.create_subregion()
     for p in tip_subregion.points:
         preview_subregion.add_point(p.position.copy())
-    modal_state.extrude_preview_subregion_id = preview_subregion.subregion_id
+    modal_state.creation.extrude_preview_subregion_id = preview_subregion.subregion_id
     modal_state.extrude_mode = True
-    modal_state.selected_region_id = region_id
-    modal_state.selected_subregion_id = sid_min
-    modal_state.extrude_height = 0.0
+    modal_state.selection.region_id = region_id
+    modal_state.selection.subregion_id = sid_min
     return True, region_id, sid_min, view3d_utils.region_2d_to_location_3d(context.region, context.region_data, mouse_2d, sum(base_positions, Vector()) / len(base_positions))
 def handle_extrusion_mousemove(context, event, start_mouse_3d):
-    if not modal_state.extrude_mode or not start_mouse_3d or not modal_state.extrude_normal or modal_state.extrude_normal.length == 0:
+    if not modal_state.extrude_mode or not start_mouse_3d or not modal_state.creation.extrude_normal or modal_state.creation.extrude_normal.length == 0:
         return False
-    modal_state.extrude_height = max(0.0, (view3d_utils.region_2d_to_location_3d(context.region, context.region_data, (event.mouse_region_x, event.mouse_region_y), start_mouse_3d) - start_mouse_3d).dot(modal_state.extrude_normal))
-    if modal_state.selected_region_id in geometry.regions and modal_state.extrude_preview_subregion_id:
-        region = geometry.regions[modal_state.selected_region_id]
-        if modal_state.selected_subregion_id in region.subregions and modal_state.extrude_preview_subregion_id in region.subregions:
-            tip_subregion = region.subregions[modal_state.selected_subregion_id]
-            preview_sub = region.subregions[modal_state.extrude_preview_subregion_id]
+    extrude_height = max(0.0, (view3d_utils.region_2d_to_location_3d(context.region, context.region_data, (event.mouse_region_x, event.mouse_region_y), start_mouse_3d) - start_mouse_3d).dot(modal_state.creation.extrude_normal))
+    if modal_state.selection.region_id in geometry.regions and modal_state.creation.extrude_preview_subregion_id:
+        region = geometry.regions[modal_state.selection.region_id]
+        if modal_state.selection.subregion_id in region.subregions and modal_state.creation.extrude_preview_subregion_id in region.subregions:
+            tip_subregion = region.subregions[modal_state.selection.subregion_id]
+            preview_sub = region.subregions[modal_state.creation.extrude_preview_subregion_id]
             for i, tip_point in enumerate(tip_subregion.points):
                 if i < len(preview_sub.points):
-                    preview_sub.points[i].position = tip_point.position + (modal_state.extrude_normal * modal_state.extrude_height)
+                    preview_sub.points[i].position = tip_point.position + (modal_state.creation.extrude_normal * extrude_height)
             preview_sub.touch()
-            update_geometry(context, modal_state.selected_region_id, update_topology=True)
+            update_geometry(context, modal_state.selection.region_id, update_topology=True)
             return True
     return False
 def end_extrusion(context, region_id):
     if region_id in geometry.regions:
         update_geometry(context, region_id, update_topology=True)
     save_state()
-    clear_modal_state()
-    return True
+    clear_modal_state(keep_edit_mode=True)
+    context.area.tag_redraw()
 
 # Scaling operation
 def start_scaling(region_id, subregion_id, hierarchical=False):
     region = geometry.regions.get(region_id)
     if not region or subregion_id not in region.subregions or subregion_id == 1:
         return False
-    snapshots, _ = collect_subregion_snapshots(region, subregion_id, hierarchical)
+    snapshots = collect_subregion_snapshots(region, subregion_id, hierarchical)
     if subregion_id not in snapshots:
         return False
     modal_state.scaling_mode = True
-    modal_state.selected_region_id = region_id
-    modal_state.selected_subregion_id = subregion_id
-    modal_state.scaling_original_positions = snapshots
+    modal_state.selection.region_id = region_id
+    modal_state.selection.subregion_id = subregion_id
+    modal_state.scaling.original_positions = snapshots
     # start_mouse_pos will be set in handle_scaling_mousemove
     return True
 def handle_scaling_mousemove(context, event):
-    if not modal_state.scaling_mode or modal_state.selected_region_id not in geometry.regions or not modal_state.scaling_original_positions:
+    if not modal_state.scaling_mode or modal_state.selection.region_id not in geometry.regions or not modal_state.scaling.original_positions:
         return False
-    if modal_state.start_mouse_pos is None:
-        modal_state.start_mouse_pos = (event.mouse_region_x, event.mouse_region_y)
+    if modal_state.scaling.start_mouse_pos is None:
+        modal_state.scaling.start_mouse_pos = (event.mouse_region_x, event.mouse_region_y)
         return True
     
-    dx = event.mouse_region_x - modal_state.start_mouse_pos[0]
-    dy = event.mouse_region_y - modal_state.start_mouse_pos[1]
+    dx = event.mouse_region_x - modal_state.scaling.start_mouse_pos[0]
+    dy = event.mouse_region_y - modal_state.scaling.start_mouse_pos[1]
     scale_factor = max(0.001, 1.0 + (dx + dy) * 0.005)
     
-    region = geometry.regions[modal_state.selected_region_id]
-    for sid, originals in modal_state.scaling_original_positions.items():
+    region = geometry.regions[modal_state.selection.region_id]
+    for sid, originals in modal_state.scaling.original_positions.items():
         if sid in region.subregions:
             pivot = sum(originals, Vector()) / len(originals)  # Calculate pivot dynamically
             for i, initial_pos in enumerate(originals):
                 if i < len(region.subregions[sid].points):
                     region.subregions[sid].points[i].position = pivot + (initial_pos - pivot) * scale_factor
             region.subregions[sid].touch()
-    update_geometry(context, modal_state.selected_region_id)
+    update_geometry(context, modal_state.selection.region_id)
     return True
 def end_scaling(context, region_id):
-    if region_id in geometry.regions:
-        update_geometry(context, region_id)
-    save_state()
-    clear_modal_state()
-    return True
+    _end_operation(context, region_id)
 
 # Rotation operation
 def start_rotation(region_id, subregion_id, hierarchical=True):
     region = geometry.regions.get(region_id)
     if not region or subregion_id not in region.subregions:
         return False
-    snapshots, _ = collect_subregion_snapshots(region, subregion_id, hierarchical)
+    snapshots = collect_subregion_snapshots(region, subregion_id, hierarchical)
     if subregion_id not in snapshots:
         return False
     modal_state.rotation_mode = True
-    modal_state.selected_region_id = region_id
-    modal_state.selected_subregion_id = subregion_id
-    modal_state.rotation_original_positions = snapshots
+    modal_state.selection.region_id = region_id
+    modal_state.selection.subregion_id = subregion_id
+    modal_state.rotation.original_positions = snapshots
     # start_mouse_pos will be set in handle_rotation_mousemove
     return True
 def handle_rotation_mousemove(context, event):
-    if not modal_state.rotation_mode or modal_state.selected_region_id not in geometry.regions or not modal_state.rotation_original_positions:
+    if not modal_state.rotation_mode or modal_state.selection.region_id not in geometry.regions or not modal_state.rotation.original_positions:
         return False
-    if modal_state.start_mouse_pos is None:
-        modal_state.start_mouse_pos = (event.mouse_region_x, event.mouse_region_y)
+    if modal_state.rotation.start_mouse_pos is None:
+        modal_state.rotation.start_mouse_pos = (event.mouse_region_x, event.mouse_region_y)
         return True
     
-    angle = (event.mouse_region_x - modal_state.start_mouse_pos[0]) * -0.01
-    pivot = sum(modal_state.rotation_original_positions[modal_state.selected_subregion_id], Vector()) / len(modal_state.rotation_original_positions[modal_state.selected_subregion_id])  # Calculate pivot dynamically
+    angle = (event.mouse_region_x - modal_state.rotation.start_mouse_pos[0]) * -0.01
+    pivot = sum(modal_state.rotation.original_positions[modal_state.selection.subregion_id], Vector()) / len(modal_state.rotation.original_positions[modal_state.selection.subregion_id])  # Calculate pivot dynamically
     rot_m = Matrix.Identity(4)
     if abs(angle) > 0.001:
         view_axis = context.region_data.view_matrix.inverted().to_3x3() @ Vector((0, 0, 1))
         rot_m = Matrix.Rotation(angle, 4, view_axis)
     
-    region = geometry.regions[modal_state.selected_region_id]
-    for sub_id, originals in modal_state.rotation_original_positions.items():
+    region = geometry.regions[modal_state.selection.region_id]
+    for sub_id, originals in modal_state.rotation.original_positions.items():
         if sub_id in region.subregions:
             for i, orig in enumerate(originals):
                 if i < len(region.subregions[sub_id].points):
                     region.subregions[sub_id].points[i].position = pivot + (rot_m @ (orig - pivot)).to_3d()
             region.subregions[sub_id].touch()
-    update_geometry(context, modal_state.selected_region_id)
+    update_geometry(context, modal_state.selection.region_id)
     return True
 def end_rotation(context, region_id, subregion_id):
-    if region_id in geometry.regions:
-        update_geometry(context, region_id)
-    save_state()
-    clear_modal_state()
-    return True
+    _end_operation(context, region_id)
 
 # Twist operation
 def start_twist(context, region_id, subregion_id, hierarchical=True):
     region = geometry.regions.get(region_id)
     if subregion_id == 1 or not region or subregion_id not in region.subregions:
         return False
-    snapshots, _ = collect_subregion_snapshots(region, subregion_id, hierarchical)
+    snapshots = collect_subregion_snapshots(region, subregion_id, hierarchical)
     if subregion_id not in snapshots:
         return False
     modal_state.twist_mode = True
-    modal_state.selected_region_id = region_id
-    modal_state.selected_subregion_id = subregion_id
-    modal_state.twist_axis = utils.tip_normal(snapshots[subregion_id], utils.get_surface_obj(context))
-    modal_state.twist_original_positions = snapshots
+    modal_state.selection.region_id = region_id
+    modal_state.selection.subregion_id = subregion_id
+    modal_state.twist.axis = utils.tip_normal(snapshots[subregion_id], utils.get_surface_obj(context))
+    modal_state.twist.original_positions = snapshots
     # start_mouse_pos will be set in handle_twist_mousemove
     return True
 def handle_twist_mousemove(context, event):
-    if not modal_state.twist_mode or modal_state.selected_region_id not in geometry.regions or not modal_state.twist_original_positions:
+    if not modal_state.twist_mode or modal_state.selection.region_id not in geometry.regions or not modal_state.twist.original_positions:
         return False
-    if modal_state.start_mouse_pos is None:
-        modal_state.start_mouse_pos = (event.mouse_region_x, event.mouse_region_y)
+    if modal_state.twist.start_mouse_pos is None:
+        modal_state.twist.start_mouse_pos = (event.mouse_region_x, event.mouse_region_y)
         return True
     
-    dx = event.mouse_region_x - modal_state.start_mouse_pos[0]
-    dy = event.mouse_region_y - modal_state.start_mouse_pos[1]
+    dx = event.mouse_region_x - modal_state.twist.start_mouse_pos[0]
+    dy = event.mouse_region_y - modal_state.twist.start_mouse_pos[1]
     angle = (dx + dy) * -0.002
     
-    anchor = sum(modal_state.twist_original_positions[modal_state.selected_subregion_id], Vector()) / len(modal_state.twist_original_positions[modal_state.selected_subregion_id])  # Calculate anchor dynamically
+    anchor = sum(modal_state.twist.original_positions[modal_state.selection.subregion_id], Vector()) / len(modal_state.twist.original_positions[modal_state.selection.subregion_id])  # Calculate anchor dynamically
     rot_m = Matrix.Identity(4)
-    if abs(angle) > 0.001 and modal_state.twist_axis and modal_state.twist_axis.length > 0:
-        rot_m = Matrix.Rotation(angle, 4, modal_state.twist_axis.normalized())
+    if abs(angle) > 0.001 and modal_state.twist.axis and modal_state.twist.axis.length > 0:
+        rot_m = Matrix.Rotation(angle, 4, modal_state.twist.axis.normalized())
     
-    region = geometry.regions[modal_state.selected_region_id]
-    for sid, originals in modal_state.twist_original_positions.items():
+    region = geometry.regions[modal_state.selection.region_id]
+    for sid, originals in modal_state.twist.original_positions.items():
         if sid in region.subregions:
             for i, orig in enumerate(originals):
                 if i < len(region.subregions[sid].points):
                     region.subregions[sid].points[i].position = anchor + (rot_m @ (orig - anchor)).to_3d()
             region.subregions[sid].touch()
-    update_geometry(context, modal_state.selected_region_id)
+    update_geometry(context, modal_state.selection.region_id)
     return True
 def end_twist(context):
-    if modal_state.selected_region_id in geometry.regions:
-        update_geometry(context, modal_state.selected_region_id)
-    save_state()
-    clear_modal_state()
-    return True
+    _end_operation(context)
 
 # Mesh conversion operation
+def _find_next_ring(current_ring_idx, prev_faces, bm, allowed):
+    """Helper function to find the next ring of vertices from current ring."""
+    n = len(current_ring_idx)
+    next_ring_idx = []
+    next_prev_faces = []
+    boundary_hit = True
+
+    def edge_between_idx(ia, ib):
+        a, b = bm.verts[ia], bm.verts[ib]
+        for e in a.link_edges:
+            if b in e.verts:
+                return e
+        return None
+
+    for i in range(n):
+        ia, ib = current_ring_idx[i], current_ring_idx[(i + 1) % n]
+        e = edge_between_idx(ia, ib)
+        if not e:
+            return None, None, None
+
+        faces = [f for f in e.link_faces if len(f.verts) == 4 and (allowed is None or all(v.index in allowed for v in f.verts))]
+        if not faces:
+            return None, None, None
+
+        fwd = faces[0] if len(faces) == 1 else (faces[1] if faces[0] is prev_faces[i] else faces[0])
+
+        opp = utils.opposite_edge(fwd, e)
+        if opp is None or opp.is_boundary:
+            boundary_hit = boundary_hit and opp is not None
+        else:
+            boundary_hit = False
+
+        a, b = bm.verts[ia], bm.verts[ib]
+        cand_v = next((ed.other_vert(a) for ed in fwd.edges if a in ed.verts and (cand_v := ed.other_vert(a)) is not b), None)
+        if not cand_v:
+            return None, None, None
+
+        next_ring_idx.append(cand_v.index)
+        next_prev_faces.append(fwd)
+
+    return next_ring_idx, next_prev_faces, boundary_hit
+
 def propagate_rings_by_vertex_map_indices(bm, ordered_root_idx, allowed_idx=None):
     bm.verts.ensure_lookup_table()
     bm.edges.ensure_lookup_table()
@@ -693,51 +729,24 @@ def propagate_rings_by_vertex_map_indices(bm, ordered_root_idx, allowed_idx=None
 
     rings_idx = [list(current_ring_idx)]
 
-    def edge_between_idx(ia, ib):
-        a, b = bm.verts[ia], bm.verts[ib]
-        for e in a.link_edges:
-            if b in e.verts:
-                return e
-        return None
-
+    # Initialize prev_faces for the first ring
     prev_faces = []
     for i in range(n):
         ia, ib = current_ring_idx[i], current_ring_idx[(i + 1) % n]
-        e = edge_between_idx(ia, ib)
+        e = bm.verts[ia].link_edges.intersection(bm.verts[ib].link_edges)
         if not e:
             return rings_idx
+        e = next(iter(e))  # Get the edge between ia and ib
         faces = [f for f in e.link_faces if len(f.verts) == 4 and (allowed is None or all(v.index in allowed for v in f.verts))]
         if not faces:
             return rings_idx
         prev_faces.append(faces[0])
 
+    # Propagate rings until boundary is hit
     while True:
-        next_ring_idx = []
-        next_prev_faces = []
-        boundary_hit = True
-        for i in range(n):
-            ia, ib = current_ring_idx[i], current_ring_idx[(i + 1) % n]
-            e = edge_between_idx(ia, ib)
-            if not e:
-                return rings_idx
-            faces = [f for f in e.link_faces if len(f.verts) == 4 and (allowed is None or all(v.index in allowed for v in f.verts))]
-            if not faces:
-                return rings_idx
-            fwd = faces[0] if len(faces) == 1 else (faces[1] if faces[0] is prev_faces[i] else faces[0])
-
-            opp = utils.opposite_edge(fwd, e)
-            if opp is None or opp.is_boundary:
-                boundary_hit = boundary_hit and opp is not None
-            else:
-                boundary_hit = False
-
-            a, b = bm.verts[ia], bm.verts[ib]
-            cand_v = next((ed.other_vert(a) for ed in fwd.edges if a in ed.verts and (cand_v := ed.other_vert(a)) is not b), None)
-            if not cand_v:
-                return rings_idx
-
-            next_ring_idx.append(cand_v.index)
-            next_prev_faces.append(fwd)
+        next_ring_idx, next_prev_faces, boundary_hit = _find_next_ring(current_ring_idx, prev_faces, bm, allowed)
+        if next_ring_idx is None:
+            break
 
         rings_idx.append(next_ring_idx)
         if boundary_hit:
@@ -829,7 +838,7 @@ def convert_mesh_object_to_tubegroom(context, mesh_obj, target_obj=None):
     if context.scene.tubegroom_curves_enabled:
         base_name = utils.get_base_name(tg_obj)
         from . import interpolation
-        system = interpolation.generate_tubegroom_interpolation()
+        system = interpolation.generate_interpolation()
         if system and base_name:
-            interpolation.build_curves_object_from_system(base_name, system)
+            interpolation.build_curves_object(base_name, system)
     return True, f'Created {len(all_region_rings)} regions from mesh.'

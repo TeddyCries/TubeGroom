@@ -425,7 +425,7 @@ def ray_tg(context, mouse_2d):
     return None, None
 
 # Selection utilities
-def get_point(mouse_2d, context, distance=20, set_highlight=False):
+def get_point(mouse_2d, context, distance=40, set_highlight=False):
     from . import operators
     distance_sq = distance * distance
     candidate = None
@@ -442,13 +442,13 @@ def get_point(mouse_2d, context, distance=20, set_highlight=False):
         threshold_3d_sq = 0.01 * 0.01  # 1 cm threshold in 3D
         for region_id, region in geometry.regions.items():
             for subregion_id, subregion in region.subregions.items():
-                if operators.modal_state.current_region_points and subregion_id != 1:
+                if operators.modal_state.creation.current_region_points and subregion_id != 1:
                     continue
                 # When dragging, only allow snapping to root points to avoid self-intersection.
                 if operators.modal_state.dragging_point and subregion_id != 1:
                     continue
                 for point_index, point in enumerate(subregion.points):
-                    if operators.modal_state.dragging_point and region_id == operators.modal_state.selected_region_id and subregion_id == operators.modal_state.selected_subregion_id and point_index == operators.modal_state.selected_point_index:
+                    if operators.modal_state.dragging_point and region_id == operators.modal_state.selection.region_id and subregion_id == operators.modal_state.selection.subregion_id and point_index == operators.modal_state.selection.point_index:
                         continue
                     disp_pos = point.position
                     if subregion_id == 1 and surface_obj and root_offset >= 0.0 and (hit_n := closest_point(surface_obj, point.position)) and hit_n[0] and hit_n[1]:
@@ -458,8 +458,8 @@ def get_point(mouse_2d, context, distance=20, set_highlight=False):
                         min_dist_sq = d_sq
                         candidate = {'rid': region_id, 'sid': subregion_id, 'pidx': point_index, 'pos3d': disp_pos}
     # Check current region points using 2D projection (since they don't have mesh yet)
-    for j, point_3d in enumerate(operators.modal_state.current_region_points):
-        if operators.modal_state.dragging_point and operators.modal_state.selected_region_id == -1 and operators.modal_state.selected_point_index == j:
+    for j, point_3d in enumerate(operators.modal_state.creation.current_region_points):
+        if operators.modal_state.dragging_point and operators.modal_state.selection.region_id == -1 and operators.modal_state.selection.point_index == j:
             continue
         disp_pos = point_3d
         if surface_obj and root_offset >= 0.0 and (hit_n := closest_point(surface_obj, point_3d)) and hit_n[0] and hit_n[1]:
@@ -469,14 +469,14 @@ def get_point(mouse_2d, context, distance=20, set_highlight=False):
             candidate = {'rid': -1, 'sid': -1, 'pidx': j, 'pos3d': disp_pos}
     if not candidate:
         if set_highlight:
-            operators.modal_state.snap_to_nearest = None
+            operators.modal_state.creation.snap_to_nearest = None
         return -1, -1, -1, None
 
     if set_highlight:
-        operators.modal_state.snap_to_nearest = candidate['pos3d']
+        operators.modal_state.creation.snap_to_nearest = candidate['pos3d']
 
     return candidate['rid'], candidate['sid'], candidate['pidx'], candidate['pos3d']
-def get_edge(mouse_2d, context, distance=10):
+def get_edge(mouse_2d, context, distance=25):
     tg_object, hit_data = ray_tg(context, mouse_2d)
     if not tg_object or not hit_data:
         return -1, -1, -1, None
@@ -597,24 +597,24 @@ def mouse_preview(context, event):
     """Manages visual previews for new points on the surface and snapping."""
     from . import operators
     from mathutils import Vector
-    state = operators.modal_state
-
+    creation = operators.modal_state.creation
+    
     mouse_2d = (event.mouse_region_x, event.mouse_region_y)
 
-    state.temp_point = None
-    state.snap_target = None
-    state.snap_to_nearest = None
+    creation.temp_point = None
+    creation.snap_target = None
+    creation.snap_to_nearest = None
     
-    current_pts = state.current_region_points
+    current_pts = creation.current_region_points
     if len(current_pts) >= 3:
         first_2d = project_2d(current_pts[0], context)
         if first_2d and (Vector(mouse_2d) - Vector(first_2d)).length < 20:
-            state.snap_target = current_pts[0]
-            state.temp_point = Vector(current_pts[0])
+            creation.snap_target = current_pts[0]
+            creation.temp_point = Vector(current_pts[0])
 
     rid, sid, pidx, nearest_pos = get_point(mouse_2d, context, 15, True)
     if nearest_pos:
-        state.temp_point = Vector(nearest_pos)
+        creation.temp_point = Vector(nearest_pos)
 
     base_obj = get_surface_obj(context)
     if base_obj and base_obj.data.vertices:
@@ -635,8 +635,8 @@ def mouse_preview(context, event):
                     (inv.to_3x3() @ ray_dir).normalized()
                 )
 
-                if success and state.temp_point is None:
-                    state.temp_point = base_obj.matrix_world @ hit_location
+                if success and creation.temp_point is None:
+                    creation.temp_point = base_obj.matrix_world @ hit_location
                 
     context.area.tag_redraw()
 

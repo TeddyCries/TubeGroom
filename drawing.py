@@ -120,11 +120,11 @@ def draw_regions(context):
             all_tris.extend(tris)
             all_colors.extend([rgba]*len(tris))
 
-    if len(operators.modal_state.current_region_points) >= 3 and operators.modal_state.current_region_color_index is not None:
-        shrink_positions = utils.snap_points(obj, operators.modal_state.current_region_points, root_offset, 4)
+    if len(operators.modal_state.creation.current_region_points) >= 3 and operators.modal_state.creation.current_region_color_index is not None:
+        shrink_positions = utils.snap_points(obj, operators.modal_state.creation.current_region_points, root_offset, 4)
         tris = triangulate_polygon(shrink_positions)
         if tris:
-            rgba = utils.color_id(operators.modal_state.current_region_color_index)
+            rgba = utils.color_id(operators.modal_state.creation.current_region_color_index)
             all_tris.extend(tris)
             all_colors.extend([rgba]*len(tris))
 
@@ -162,22 +162,22 @@ def draw_edges(context):
         draw_batch(gpu.shader.from_builtin('UNIFORM_COLOR'), 'LINES', all_edges, (1,1,1,1), width=2.0)
         gpu.state.depth_test_set('NONE')
 
-    if len(operators.modal_state.current_region_points) >= 2:
-        current_edges = [p for i,p in enumerate(operators.modal_state.current_region_points[:-1])
-                         for p in (operators.modal_state.current_region_points[i], operators.modal_state.current_region_points[i+1])]
+    if len(operators.modal_state.creation.current_region_points) >= 2:
+        current_edges = [p for i,p in enumerate(operators.modal_state.creation.current_region_points[:-1])
+                         for p in (operators.modal_state.creation.current_region_points[i], operators.modal_state.creation.current_region_points[i+1])]
         gpu.state.depth_test_set('ALWAYS')
         draw_batch(gpu.shader.from_builtin('UNIFORM_COLOR'), 'LINES', current_edges, (1.0,1.0,0.2,1.0), width=2.0)
         gpu.state.depth_test_set('NONE')
 
-    if operators.modal_state.current_region_points and operators.modal_state.temp_point and not operators.modal_state.dragging_point:
-        start = operators.modal_state.current_region_points[-1]
-        end = operators.modal_state.current_region_points[0] if operators.modal_state.snap_to_first and len(operators.modal_state.current_region_points)>=3 else operators.modal_state.temp_point
+    if operators.modal_state.creation.current_region_points and operators.modal_state.creation.temp_point and not operators.modal_state.dragging_point:
+        start = operators.modal_state.creation.current_region_points[-1]
+        end = operators.modal_state.creation.current_region_points[0] if operators.modal_state.creation.snap_target and len(operators.modal_state.creation.current_region_points)>=3 else operators.modal_state.creation.temp_point
         draw_batch(gpu.shader.from_builtin('UNIFORM_COLOR'), 'LINES', [start, end], (1.0,1.0,0.0,0.8), width=2.0)
 def draw_points(context):
     from . import geometry, operators
     obj = utils.get_surface_obj(context)
     root_offset = getattr(context.scene, 'strand_root_offset', 0.005)
-    points_normal, points_dragged, points_creating, points_creating_dragged, points_highlight = [], [], [], [], []
+    points_normal, points_dragged, points_creating, points_creating_dragged = [], [], [], []
 
     for region_id, region in geometry.regions.items():
         for sub_id, sub in region.subregions.items():
@@ -196,44 +196,40 @@ def draw_points(context):
 
             for i, pos in enumerate(display_positions):
                 if (operators.modal_state.dragging_point and
-                    operators.modal_state.selected_region_id == region_id and
-                    operators.modal_state.selected_subregion_id == sub_id and
-                    operators.modal_state.selected_point_index == i):
+                    operators.modal_state.selection.region_id == region_id and
+                    operators.modal_state.selection.subregion_id == sub_id and
+                    operators.modal_state.selection.point_index == i):
                     points_dragged.append(pos)
                 else:
-                    if hasattr(operators.modal_state, 'highlight_region_id') and operators.modal_state.highlight_region_id == region_id and operators.modal_state.highlight_subregion_id == sub_id:
-                        points_highlight.append(pos)
-                    else:
-                        points_normal.append(pos)
+                    points_normal.append(pos)
 
-    if operators.modal_state.current_region_points:
-        preview = utils.snap_points(obj, operators.modal_state.current_region_points, root_offset, 0)
+    if operators.modal_state.creation.current_region_points:
+        preview = utils.snap_points(obj, operators.modal_state.creation.current_region_points, root_offset, 0)
         for j, pos in enumerate(preview):
-            if operators.modal_state.dragging_point and operators.modal_state.selected_region_id == -1 and operators.modal_state.selected_point_index == j:
+            if operators.modal_state.dragging_point and operators.modal_state.selection.region_id == -1 and operators.modal_state.selection.point_index == j:
                 points_creating_dragged.append(pos)
             else:
                 points_creating.append(pos)
 
     gpu.state.depth_test_set('LESS_EQUAL')
     draw_batch(gpu.shader.from_builtin('POINT_UNIFORM_COLOR'), 'POINTS', points_normal, (0.2,0.8,1.0,1.0), size=10 if operators.modal_state.edit_mode else 8)
-    draw_batch(gpu.shader.from_builtin('POINT_UNIFORM_COLOR'), 'POINTS', points_highlight, (1,1,1,1), size=10 if operators.modal_state.edit_mode else 8)
     draw_batch(gpu.shader.from_builtin('POINT_UNIFORM_COLOR'), 'POINTS', points_creating, (0.2,0.8,1.0,1.0), size=8)
     gpu.state.depth_test_set('ALWAYS')
-    draw_batch(gpu.shader.from_builtin('POINT_UNIFORM_COLOR'), 'POINTS', points_dragged, (1,1,1,1), size=16 if operators.modal_state.snap_to_nearest else 14)
+    draw_batch(gpu.shader.from_builtin('POINT_UNIFORM_COLOR'), 'POINTS', points_dragged, (1,1,1,1), size=16 if operators.modal_state.creation.snap_to_nearest else 14)
     gpu.state.depth_test_set('LESS_EQUAL')
 
     if points_creating_dragged:
-        color = (1,1,0,1) if operators.modal_state.snap_to_nearest else (1,0,1,1)
-        size = 16 if operators.modal_state.snap_to_nearest else 14
+        color = (1,1,0,1) if operators.modal_state.creation.snap_to_nearest else (1,0,1,1)
+        size = 16 if operators.modal_state.creation.snap_to_nearest else 14
         gpu.state.depth_test_set('ALWAYS')
         draw_batch(gpu.shader.from_builtin('POINT_UNIFORM_COLOR'), 'POINTS', points_creating_dragged, color, size=size)
         gpu.state.depth_test_set('LESS_EQUAL')
 
-    if operators.modal_state.temp_point and not operators.modal_state.snap_to_first:
-        color = (1,1,0,1) if operators.modal_state.snap_to_nearest else (0.2,0.8,1.0,0.7)
-        size = 12 if operators.modal_state.snap_to_nearest else 8
+    if operators.modal_state.creation.temp_point and not operators.modal_state.creation.snap_target:
+        color = (1,1,0,1) if operators.modal_state.creation.snap_to_nearest else (0.2,0.8,1.0,0.7)
+        size = 12 if operators.modal_state.creation.snap_to_nearest else 8
         gpu.state.depth_test_set('ALWAYS')
-        draw_batch(gpu.shader.from_builtin('POINT_UNIFORM_COLOR'), 'POINTS', [operators.modal_state.temp_point], color, size=size)
+        draw_batch(gpu.shader.from_builtin('POINT_UNIFORM_COLOR'), 'POINTS', [operators.modal_state.creation.temp_point], color, size=size)
         gpu.state.depth_test_set('LESS_EQUAL')
 
     gpu.state.depth_test_set('NONE')

@@ -19,7 +19,6 @@ class Subregion:
         self.region_id = region_id
         self.subregion_id = subregion_id
         self.points = []
-        self.extrude_height = 0.0
         self.last_modified = time.time()
     def add_point(self, position):
         point = Point(position, self.region_id, self.subregion_id)
@@ -187,7 +186,7 @@ def update_mesh_date(context, allow_rebuild_from_mesh=False, allow_create=True, 
 
     if allow_rebuild_from_mesh and not regions:
         from . import interpolation
-        interpolation.rebuild_regions_from_merged_mesh(obj)
+        interpolation.rebuild_regions(obj)
 
     mesh = obj.data
     verts, faces, vert_meta, vert_colors, vertical_edges = build_all_data(context, region_id)

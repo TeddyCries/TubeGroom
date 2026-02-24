@@ -61,11 +61,11 @@ class TUBEGROOM_OT_build_curves(bpy.types.Operator):
         if not base_name:
             self.report({'ERROR'}, 'Invalid object name')
             return {'CANCELLED'}
-        system = interpolation.generate_tubegroom_interpolation()
+        system = interpolation.generate_interpolation()
         if not system:
             self.report({'ERROR'}, 'Interpolation failed')
             return {'CANCELLED'}
-        curves_obj = interpolation.build_curves_object_from_system(base_name, system)
+        curves_obj = interpolation.build_curves_object(base_name, system)
         if not curves_obj:
             self.report({'ERROR'}, 'Build failed')
             return {'CANCELLED'}
@@ -151,7 +151,7 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
             return {'PASS_THROUGH'}
         operators.modal_state.mouse_was_over_ui = is_mouse_over_ui
         if is_mouse_over_ui or context.region.type != 'WINDOW':
-            if operators.modal_state.temp_point:
+            if operators.modal_state.creation.temp_point:
                 # temp_point se limpia automáticamente con clear_modal_state()
                 context.area.tag_redraw()
             return {'PASS_THROUGH'}
@@ -161,7 +161,7 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
             return {'PASS_THROUGH'}
         if event.type == 'MOUSEMOVE':
             if operators.modal_state.extrude_mode:
-                operators.handle_extrusion_mousemove(context, event, operators.modal_state.drag_start_mouse_3d)
+                operators.handle_extrusion_mousemove(context, event, operators.modal_state.drag.start_mouse_3d)
                 context.area.tag_redraw()
             elif operators.modal_state.scaling_mode:
                 operators.handle_scaling_mousemove(context, event)
@@ -180,7 +180,7 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
         elif event.type == 'LEFTMOUSE' and event.value == 'PRESS':
             mouse_2d = (event.mouse_region_x, event.mouse_region_y)
             shift, ctrl, alt = event.shift, event.ctrl, event.alt
-            is_creating = bool(operators.modal_state.current_region_points)
+            is_creating = bool(operators.modal_state.creation.current_region_points)
             rid_p, sid_p, pidx, _ = utils.get_point(
                 mouse_2d,
                 context,
@@ -260,7 +260,7 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
                     return {'RUNNING_MODAL'}
             
             # Double-click or simple click on body to insert subregion
-            if body_hit and rid_face != -1:
+            if body_hit and rid_face != -1 and rid_face in geom.regions:
                 adjacent_subregions = [sid for sid in geom.regions[rid_face].subregions.keys() if sid != body_sid]
                 if len(adjacent_subregions) >= 1:
                     closest_sub = min(adjacent_subregions, key=lambda s: abs(s - body_sid))
@@ -270,14 +270,14 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
                         return {'RUNNING_MODAL'}
             
             if is_creating:
-                if operators.modal_state.snap_target and len(operators.modal_state.current_region_points) >= 3:
+                if operators.modal_state.creation.snap_target and len(operators.modal_state.creation.current_region_points) >= 3:
                     return self.end_region(context)
-                if operators.modal_state.temp_point:
+                if operators.modal_state.creation.temp_point:
                     return self.start_region(context)
                 return {'RUNNING_MODAL'}
 
             # If not creating, we are trying to start a new region.
-            if operators.modal_state.temp_point:
+            if operators.modal_state.creation.temp_point:
                 # A temp_point exists. It's either on the surface, or snapped to an existing point.
                 if sid_p <= 1:  # Clicked on surface (-1) or a root point (1)
                     return self.start_region(context)
@@ -328,7 +328,7 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
         if context.mode == 'EDIT_MESH':
             bpy.ops.object.mode_set(mode='OBJECT')
         from . import interpolation
-        interpolation.rebuild_regions_from_merged_mesh(selected)
+        interpolation.rebuild_regions(selected)
         surf_obj = utils.get_surface_obj(context)
         if not surf_obj or surf_obj.type != 'MESH':
             self.report({'ERROR'}, "Select target object")
@@ -355,7 +355,7 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
         # Limpiar variables del modal anterior
         operators.clear_modal_state()
         operators.modal_state.edit_mode = True
-        operators.modal_state.current_region_color_index = geom.next_region_id
+        operators.modal_state.creation.current_region_color_index = geom.next_region_id
         operators.save_state()
       
         from . import drawing as draw_regions
@@ -409,8 +409,8 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
         ok, region_id, subregion_id, start_mouse_3d = operators.start_extrusion(context, event)
         
         if ok:
-            operators.modal_state.drag_start_mouse_3d = start_mouse_3d
-            operators.modal_state.selected_region_id = region_id
+            operators.modal_state.drag.start_mouse_3d = start_mouse_3d
+            operators.modal_state.selection.region_id = region_id
             
             self.report({'INFO'}, "Extrusion started")
         else:
@@ -419,7 +419,7 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
         return {'RUNNING_MODAL'}
 
     def end_extrusion(self, context):
-        region_id = operators.modal_state.selected_region_id
+        region_id = operators.modal_state.selection.region_id
         operators.end_extrusion(context, region_id)
         self.report({'INFO'}, "Extrusion done")
         context.area.tag_redraw()
@@ -468,7 +468,7 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
         self.report({'INFO'}, msg)
         return {'RUNNING_MODAL'}
     def end_scaling(self, context):
-        region_id = operators.modal_state.selected_region_id
+        region_id = operators.modal_state.selection.region_id
         operators.end_scaling(context, region_id)
         self.report({'INFO'}, "Scaling done")
         context.area.tag_redraw()
@@ -480,8 +480,8 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
         self.report({'INFO'}, msg)
         return {'RUNNING_MODAL'}
     def end_rotation(self, context):
-        region_id = operators.modal_state.selected_region_id
-        subregion_id = operators.modal_state.selected_subregion_id
+        region_id = operators.modal_state.selection.region_id
+        subregion_id = operators.modal_state.selection.subregion_id
         operators.end_rotation(context, region_id, subregion_id)
         self.report({'INFO'}, "Rotation done")
         context.area.tag_redraw()
@@ -495,7 +495,7 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
         if action_func():
             geom.update_mesh_date(context)
             from . import interpolation
-            interpolation.update_tubegroom_interpolation(context, None, update_topology=True)
+            interpolation.update_interpolation(context, None, update_topology=True)
             from . import drawing
             drawing.clear_cache()
             context.area.tag_redraw()
@@ -522,7 +522,7 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
         operators.modal_state.edit_mode = False
         if context.area:
             context.area.tag_redraw()
-        total_points = len(operators.modal_state.current_region_points)
+        total_points = len(operators.modal_state.creation.current_region_points)
         for region in geom.regions.values():
             for sub in region.subregions.values():
                 total_points += len(sub.points)
