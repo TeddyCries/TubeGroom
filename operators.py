@@ -733,7 +733,9 @@ def propagate_rings_by_vertex_map_indices(bm, ordered_root_idx, allowed_idx=None
     prev_faces = []
     for i in range(n):
         ia, ib = current_ring_idx[i], current_ring_idx[(i + 1) % n]
-        e = bm.verts[ia].link_edges.intersection(bm.verts[ib].link_edges)
+        edges_a = set(bm.verts[ia].link_edges)
+        edges_b = set(bm.verts[ib].link_edges)
+        e = edges_a.intersection(edges_b)
         if not e:
             return rings_idx
         e = next(iter(e))  # Get the edge between ia and ib

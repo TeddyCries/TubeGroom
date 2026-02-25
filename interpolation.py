@@ -252,9 +252,19 @@ def main_guide_curve(system, region_id):
     faces = system.get('face_topology', {}).get(region_id, [])
     if not faces:
         return None
+    
+    # Get surface object for snapping (same as regular curves)
+    t_obj = getattr(bpy.context.scene, 'strand_raycast_target', None)
+    surface_obj = t_obj if t_obj and t_obj.type == 'MESH' and not utils.tubegroom_object(t_obj) else None
+    
     curve_points = []
-    for face in faces:
+    for i, face in enumerate(faces):
         barycenter = sum(face.region_positions, Vector()) / len(face.region_positions)
+        # Only snap the first point to surface (like regular curves do with root subregion)
+        if i == 0 and surface_obj:
+            hit, _ = utils.closest_point(surface_obj, barycenter)
+            if hit:
+                barycenter = hit
         curve_points.append(barycenter)
     max_idx = max((c.get('point_index', -1) for c in system.get('curves', []) if c.get('region_id') == region_id), default=-1)
     return {'stream_id': (region_id, 'guide'), 'region_id': region_id, 'point_index': max_idx + 1, 'points': curve_points, 'is_guide': True}
