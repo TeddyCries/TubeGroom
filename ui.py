@@ -1,7 +1,7 @@
 import bpy
 from mathutils import Vector
 from bpy_extras import view3d_utils
-from . import geometry as geom, utils, interpolation, operators
+from . import geometry as geom, utils, operators
 
 class TUBEGROOM_PT_main_panel(bpy.types.Panel):
     bl_label = "TubeGroom"
