@@ -115,7 +115,6 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
         operators.modal_state.mouse_was_over_ui = is_mouse_over_ui
         if is_mouse_over_ui or context.region.type != 'WINDOW':
             if operators.modal_state.creation.temp_point:
-                # temp_point se limpia automáticamente con clear_modal_state()
                 context.area.tag_redraw()
             return {'PASS_THROUGH'}
         context.window.cursor_set('CROSSHAIR')
@@ -314,8 +313,6 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
             ca.active_color = ca['region_color']
         if context.mode == 'OBJECT':
             bpy.ops.object.select_all(action='DESELECT')
-        # Variables de estado ya están en modal_state, no necesitamos duplicarlas
-        # Limpiar variables del modal anterior
         operators.clear_modal_state()
         operators.modal_state.edit_mode = True
         operators.modal_state.creation.current_region_color_index = geom.TubeGroom.next_region_id
@@ -477,11 +474,9 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
     def end_modal(self, context):
         from .drawing import remove_draw_handlers
         remove_draw_handlers()
-        # Usar clear_modal_state() que limpia automáticamente dragging_point y otras variables temporales
         operators.clear_modal_state()
         from . import drawing as draw_regions
         draw_regions.clear_cache()
-        # Solo establecer explícitamente lo que necesita persistir después del modal
         operators.modal_state.edit_mode = False
         if context.area:
             context.area.tag_redraw()

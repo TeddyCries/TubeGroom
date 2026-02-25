@@ -206,7 +206,6 @@ def end_region(context):
     geometry.TubeGroom.regions[region_id] = region
     geometry.TubeGroom.next_region_id += 1
     
-    # Usar clear_modal_state() para limpiar variables temporales
     clear_modal_state(keep_edit_mode=True)
     geometry.update_mesh_date(context)
     context.area.tag_redraw()
@@ -321,7 +320,6 @@ def cancel_active_operation(context):
             update_geometry(context, region_to_update, update_topology=True)
         return "Operation cancelled"
     if modal_state.creation.current_region_points:
-        # Usar clear_modal_state() para limpiar variables temporales
         clear_modal_state()
         return "Region creation cancelled"
     return None
@@ -331,7 +329,6 @@ def delete_from_current_region(context, point_index):
     if len(modal_state.creation.current_region_points) > 1:
         modal_state.creation.current_region_points.pop(point_index)
     else:
-        # Usar clear_modal_state() para limpiar variables temporales
         clear_modal_state()
         context.area.tag_redraw()
     save_state()
