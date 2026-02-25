@@ -98,7 +98,7 @@ def draw_regions(context):
     root_offset = getattr(context.scene, 'strand_root_offset', 0.005)
     all_tris, all_colors = [], []
 
-    for region_id, region in geometry.regions.items():
+    for region_id, region in geometry.TubeGroom.regions.items():
         if len(region.subregions) != 1 or 1 not in region.subregions:
             continue
         root = region.subregions.get(1)
@@ -139,7 +139,7 @@ def draw_edges(context):
     root_offset = getattr(context.scene, 'strand_root_offset', 0.005)
     all_edges = []
 
-    for region in geometry.regions.values():
+    for region in geometry.TubeGroom.regions.values():
         for sub_id, sub in region.subregions.items():
             if len(sub.get_positions()) < 3:
                 continue
@@ -179,7 +179,7 @@ def draw_points(context):
     root_offset = getattr(context.scene, 'strand_root_offset', 0.005)
     points_normal, points_dragged, points_creating, points_creating_dragged = [], [], [], []
 
-    for region_id, region in geometry.regions.items():
+    for region_id, region in geometry.TubeGroom.regions.items():
         for sub_id, sub in region.subregions.items():
             positions = sub.get_positions()
             if not positions:

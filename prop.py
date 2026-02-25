@@ -40,7 +40,7 @@ def refresh_mesh_system(self, context):
             return
         obj = active_obj
     
-    if not geometry.regions and obj.data.vertices:
+    if not geometry.TubeGroom.regions and obj.data.vertices:
         from . import interpolation
         interpolation.rebuild_regions(obj)
     geometry.update_mesh_date(context)

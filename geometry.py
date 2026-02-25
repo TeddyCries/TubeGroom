@@ -4,10 +4,6 @@ from mathutils import Vector
 from . import utils
 import time
 
-# Global storage for TubeGroom data
-regions = {}
-next_region_id = 1
-
 # Data structures
 class Point:
     def __init__(self, position, region_id, subregion_id):
@@ -58,6 +54,9 @@ class Region:
         self.next_subregion_id = new_sid
     def touch(self):
         self.last_modified = time.time()
+class TubeGroom:
+    regions = {}
+    next_region_id = 1
 
 # Mesh and attribute management
 def ensure_attrs(mesh):
@@ -109,7 +108,7 @@ def get_tg_obj(context, target_obj=None, allow_create=True):
 # Mesh update functions
 def build_mesh_data(context, region_id):
     bend, segs = utils.get_bend_and_segs(context)
-    region = regions.get(region_id)
+    region = TubeGroom.regions.get(region_id)
     if not region or not region.subregions:
         return [], [], [], [], set()
     
@@ -152,7 +151,7 @@ def build_all_data(context, region_id=None):
     all_vertical_edges = set()
     vertex_offset = 0
 
-    region_ids = [region_id] if region_id is not None else sorted(regions.keys())
+    region_ids = [region_id] if region_id is not None else sorted(TubeGroom.regions.keys())
 
     for rid in region_ids:
         verts, faces, meta, colors, v_edges = build_mesh_data(context, rid)
@@ -177,14 +176,14 @@ def update_mesh_date(context, allow_rebuild_from_mesh=False, allow_create=True, 
     """Update mesh for all regions or a specific region if region_id is provided."""
     obj = get_tg_obj(context, allow_create=allow_create)
     if not obj:
-        if not allow_create and regions and not any(utils.tubegroom_object(o) for o in bpy.data.objects):
+        if not allow_create and TubeGroom.regions and not any(utils.tubegroom_object(o) for o in bpy.data.objects):
             from . import operators
             operators.reset_all_data(clear_history=True)
             from . import drawing
             drawing.clear_cache()
         return False
 
-    if allow_rebuild_from_mesh and not regions:
+    if allow_rebuild_from_mesh and not TubeGroom.regions:
         from . import interpolation
         interpolation.rebuild_regions(obj)
 

@@ -39,43 +39,6 @@ class TUBEGROOM_OT_create_tubegroom(bpy.types.Operator):
         context.view_layer.objects.active = obj
         self.report({'INFO'}, f"Created: {obj.name}")
         return {'FINISHED'}
-class TUBEGROOM_OT_build_curves(bpy.types.Operator):
-    bl_idname = "strand.build_curves"
-    bl_label = "Build Curves"
-    bl_description = "Generate the final hair curves object from the TubeGroom guides"
-    bl_options = {'REGISTER', 'UNDO'}
-    def execute(self, context):
-        if not context.scene.strand_curves_enabled:
-            self.report({'INFO'}, "Enable curves first")
-            return {'CANCELLED'}
-        if context.mode == 'EDIT_MESH':
-            bpy.ops.object.mode_set(mode='OBJECT')
-        if not geom.regions:
-            self.report({'WARNING'}, "No regions")
-            return {'CANCELLED'}
-        tg = context.active_object
-        if not utils.tubegroom_object(tg):
-            self.report({'ERROR'}, 'Select TubeGroom mesh')
-            return {'CANCELLED'}
-        base_name = utils.get_base_name(tg)
-        if not base_name:
-            self.report({'ERROR'}, 'Invalid object name')
-            return {'CANCELLED'}
-        system = interpolation.generate_interpolation()
-        if not system:
-            self.report({'ERROR'}, 'Interpolation failed')
-            return {'CANCELLED'}
-        curves_obj = interpolation.build_curves_object(base_name, system)
-        if not curves_obj:
-            self.report({'ERROR'}, 'Build failed')
-            return {'CANCELLED'}
-        curves_obj.data.display.surface_subdivisions = context.scene.render.hair_subdiv
-        curves_obj.data.update_tag()
-        enable = context.scene.strand_interpolation_enabled
-        curves_obj.show_in_front = enable
-        curves_obj.color[3] = 0.8 if enable else 1.0
-        self.report({'INFO'}, f'Built: {curves_obj.name}')
-        return {'FINISHED'}
 class TUBEGROOM_OT_mesh_to_tubegroom(bpy.types.Operator):
     bl_idname = "strand.convert"
     bl_label = "Mesh to TubeGroom"
@@ -260,8 +223,8 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
                     return {'RUNNING_MODAL'}
             
             # Double-click or simple click on body to insert subregion
-            if body_hit and rid_face != -1 and rid_face in geom.regions:
-                adjacent_subregions = [sid for sid in geom.regions[rid_face].subregions.keys() if sid != body_sid]
+            if body_hit and rid_face != -1 and rid_face in geom.TubeGroom.regions:
+                adjacent_subregions = [sid for sid in geom.TubeGroom.regions[rid_face].subregions.keys() if sid != body_sid]
                 if len(adjacent_subregions) >= 1:
                     closest_sub = min(adjacent_subregions, key=lambda s: abs(s - body_sid))
                     if operators.insert_subregion(context, rid_face, min(body_sid, closest_sub), max(body_sid, closest_sub)):
@@ -355,7 +318,7 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
         # Limpiar variables del modal anterior
         operators.clear_modal_state()
         operators.modal_state.edit_mode = True
-        operators.modal_state.creation.current_region_color_index = geom.next_region_id
+        operators.modal_state.creation.current_region_color_index = geom.TubeGroom.next_region_id
         operators.save_state()
       
         from . import drawing as draw_regions
@@ -435,7 +398,7 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
         return {'RUNNING_MODAL'}
     
     def start_move_subregion(self, context, event, region_id, subregion_id, hierarchical=False):
-        region = geom.regions.get(region_id)
+        region = geom.TubeGroom.regions.get(region_id)
         if not region or subregion_id not in region.subregions:
             return {'RUNNING_MODAL'}
         positions = region.subregions[subregion_id].get_positions()
@@ -523,10 +486,10 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
         if context.area:
             context.area.tag_redraw()
         total_points = len(operators.modal_state.creation.current_region_points)
-        for region in geom.regions.values():
+        for region in geom.TubeGroom.regions.values():
             for sub in region.subregions.values():
                 total_points += len(sub.points)
-        self.report({'INFO'}, f"{len(geom.regions)} regions, {total_points} points")
+        self.report({'INFO'}, f"{len(geom.TubeGroom.regions)} regions, {total_points} points")
         return {'FINISHED'}
 class TUBEGROOM_OT_clear_points(bpy.types.Operator):
     bl_idname = "strand.clear_points"
@@ -589,7 +552,7 @@ class TUBEGROOM_PT_interpolation_panel(bpy.types.Panel):
         # Shape settings collapsible section
         row = sub_box.row()
         row.prop(scene, "strand_show_shape_settings", text=" Shape",
-                 icon='TRIA_RIGHT' if not scene.tubegroom_show_shape_settings else 'TRIA_DOWN',
+                 icon='TRIA_RIGHT' if not scene.strand_show_shape_settings else 'TRIA_DOWN',
                  emboss=False)
         if scene.strand_show_shape_settings:
             shape_box = sub_box.box()
@@ -598,7 +561,6 @@ class TUBEGROOM_PT_interpolation_panel(bpy.types.Panel):
             row = shape_box.row()
             row.prop(scene.render, "hair_type", expand=True)
             shape_box.prop(scene.render, "hair_subdiv", text="Additional Subdivisions")
-        sub_box .operator('strand.build_curves', text='Create Curves Object', icon='OUTLINER_DATA_CURVES')
 
 # Controls Panel
 class TUBEGROOM_PT_controls_panel(bpy.types.Panel):
@@ -642,7 +604,6 @@ classes = [
     TUBEGROOM_PT_interpolation_panel,
     TUBEGROOM_PT_controls_panel,
     TUBEGROOM_OT_create_tubegroom,
-    TUBEGROOM_OT_build_curves,
     TUBEGROOM_OT_edit_mode,
     TUBEGROOM_OT_mesh_to_tubegroom,
     TUBEGROOM_OT_clear_points,

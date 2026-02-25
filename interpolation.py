@@ -53,7 +53,7 @@ def ensure_root_frame(base, pts, center):
     base['root_frame'] = (t, b, n, center.copy())
     return base['root_frame']
 def analyze_region_topology(system, region_id):
-    region = geometry.regions.get(region_id)
+    region = geometry.TubeGroom.regions.get(region_id)
     if not region:
         return []
     faces = [build_face(sub_id, pos) for sub_id, sub in region.subregions.items() if len(pos := sub.get_positions()) >= 3]
@@ -125,7 +125,7 @@ def sample_root_uv(base, radius, seed):
 
 # Curve generation from region topology
 def generate_region_curves(system, region_id):
-    region = geometry.regions.get(region_id)
+    region = geometry.TubeGroom.regions.get(region_id)
     if not region:
         return
     base = system['region_base'].setdefault(region_id, {})
@@ -216,7 +216,7 @@ def generate_region_curves(system, region_id):
             system['curves'].append({'stream_id': (region_id, point_idx), 'region_id': region_id, 'point_index': point_idx, 'points': curve_points})
 def generate_all_curves(system):
     system['curves'] = []
-    for rid in sorted(geometry.regions.keys(), key=lambda r: (int(r) if str(r).isdigit() else float('inf'), str(r))):
+    for rid in sorted(geometry.TubeGroom.regions.keys(), key=lambda r: (int(r) if str(r).isdigit() else float('inf'), str(r))):
         analyze_region_topology(system, rid)
         generate_region_curves(system, rid)
         guide = main_guide_curve(system, rid)
@@ -334,7 +334,7 @@ def build_curves_object(base_name, system):
     return obj
 def generate_interpolation():
     global tubegroom_data
-    if not geometry.regions:
+    if not geometry.TubeGroom.regions:
         system = create_system()
         tubegroom_data = system
         return system
@@ -373,7 +373,7 @@ def update_interpolation(context, region_id=None, update_topology=False):
     if not base_name:
         return
     
-    if not geometry.regions:
+    if not geometry.TubeGroom.regions:
         tubegroom_data = None
         system = create_system()
         build_curves_object(base_name, system)
@@ -394,7 +394,7 @@ def update_interpolation(context, region_id=None, update_topology=False):
             base.pop('last_radius', None)
     
     if region_id is None or update_topology:
-        existing_region_ids = set(geometry.regions.keys())
+        existing_region_ids = set(geometry.TubeGroom.regions.keys())
         for rid in list(system.get('face_topology', {}).keys()):
             if rid not in existing_region_ids:
                 system['face_topology'].pop(rid, None)
@@ -416,8 +416,8 @@ def rebuild_regions(obj):
     mesh = obj.data
     if not all(attr in mesh.attributes for attr in ['region_id', 'subregion_id']):
         return False
-    geometry.regions.clear()
-    geometry.next_region_id = 1
+    geometry.TubeGroom.regions.clear()
+    geometry.TubeGroom.next_region_id = 1
     from collections import defaultdict
     verts_by_subregion = defaultdict(list)
     rid_attr = mesh.attributes['region_id'].data
@@ -483,7 +483,7 @@ def rebuild_regions(obj):
                 subregion.add_point(pos)
             region.subregions[sid] = subregion
         region.next_subregion_id = max_sid + 1
-        geometry.regions[rid] = region
-    geometry.next_region_id = max_rid + 1
+        geometry.TubeGroom.regions[rid] = region
+    geometry.TubeGroom.next_region_id = max_rid + 1
     # Color index managed internally
-    return len(geometry.regions) > 0
+    return len(geometry.TubeGroom.regions) > 0

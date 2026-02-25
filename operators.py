@@ -94,8 +94,8 @@ def save_state():
                 'subregion_id': s.subregion_id,
                 'points': [p.position.copy() for p in s.points]
             } for sid, s in r.subregions.items()}
-        } for rid, r in geometry.regions.items()},
-        'next_region_id': geometry.next_region_id,
+        } for rid, r in geometry.TubeGroom.regions.items()},
+        'next_region_id': geometry.TubeGroom.next_region_id,
         'current_region_points': [p.copy() for p in modal_state.creation.current_region_points]
     }
     history = history[:history_index + 1]
@@ -107,7 +107,7 @@ def save_state():
 
 def _restore_state(state):
     """Helper function to restore regions and modal state from a saved state."""
-    geometry.regions.clear()
+    geometry.TubeGroom.regions.clear()
     for rid, rdata in state['regions'].items():
         region = geometry.Region(rdata['region_id'], rdata['color_index'])
         region.next_subregion_id = rdata['next_subregion_id']
@@ -116,8 +116,8 @@ def _restore_state(state):
             for pos in sdata['points']:
                 subregion.add_point(pos)
             region.subregions[sid] = subregion
-        geometry.regions[rid] = region
-    geometry.next_region_id = state['next_region_id']
+        geometry.TubeGroom.regions[rid] = region
+    geometry.TubeGroom.next_region_id = state['next_region_id']
     modal_state.creation.current_region_points = [p.copy() for p in state.get('current_region_points', [])]
     clear_modal_state(keep_edit_mode=True)
 
@@ -144,8 +144,8 @@ def clear_modal_state(keep_edit_mode=None):
     modal_state.reset(keep_edit_mode=keep_edit_mode if keep_edit_mode is not None else False)
 def reset_all_data(keep_edit_mode=False, clear_history=False):
     global history, history_index
-    geometry.regions.clear()
-    geometry.next_region_id = 1
+    geometry.TubeGroom.regions.clear()
+    geometry.TubeGroom.next_region_id = 1
     # Simply use clear_modal_state - it recreates the instance cleanly
     clear_modal_state(keep_edit_mode=keep_edit_mode)
     if clear_history:
@@ -185,7 +185,7 @@ def add_point(context):
     if not modal_state.creation.temp_point:
         return 0
     if not modal_state.creation.current_region_points:
-        modal_state.creation.current_region_color_index = geometry.next_region_id
+        modal_state.creation.current_region_color_index = geometry.TubeGroom.next_region_id
     modal_state.creation.current_region_points.append(modal_state.creation.temp_point.copy())
     modal_state.creation.temp_point = None
     modal_state.creation.snap_target = None
@@ -196,15 +196,15 @@ def end_region(context):
     if len(modal_state.creation.current_region_points) < 3:
         return None
     
-    region_id = geometry.next_region_id
+    region_id = geometry.TubeGroom.next_region_id
     region = geometry.Region(region_id, region_id)
     subregion = region.create_subregion()
     
     for point_pos in modal_state.creation.current_region_points:
         subregion.add_point(point_pos)
 
-    geometry.regions[region_id] = region
-    geometry.next_region_id += 1
+    geometry.TubeGroom.regions[region_id] = region
+    geometry.TubeGroom.next_region_id += 1
     
     # Usar clear_modal_state() para limpiar variables temporales
     clear_modal_state(keep_edit_mode=True)
@@ -216,7 +216,7 @@ def end_region(context):
 # Insertion operations
 def insert_point_edge(context, region_id, subregion_id, edge_index):
     """Insert a new point on an edge, propagating it to all subregions in the hierarchy."""
-    region = geometry.regions.get(region_id)
+    region = geometry.TubeGroom.regions.get(region_id)
     if not region:
         return False
     base = region.subregions.get(subregion_id)
@@ -254,7 +254,7 @@ def insert_point_edge(context, region_id, subregion_id, edge_index):
     return changed
 def insert_subregion(context, region_id, subregion_id1, subregion_id2, factor=0.5):
     """Insert a new subregion between two existing ones."""
-    region = geometry.regions.get(region_id)
+    region = geometry.TubeGroom.regions.get(region_id)
     if not region:
         return False
     s1 = region.subregions.get(subregion_id1)
@@ -317,7 +317,7 @@ def cancel_active_operation(context):
         undo_state()
         clear_modal_state(keep_edit_mode=True)
         # Only update the region that was being edited, not all regions
-        if region_to_update in geometry.regions:
+        if region_to_update in geometry.TubeGroom.regions:
             update_geometry(context, region_to_update, update_topology=True)
         return "Operation cancelled"
     if modal_state.creation.current_region_points:
@@ -336,7 +336,7 @@ def delete_from_current_region(context, point_index):
         context.area.tag_redraw()
     save_state()
 def delete_from_hierarchy(context, region_id, point_index):
-    region = geometry.regions.get(region_id)
+    region = geometry.TubeGroom.regions.get(region_id)
     if not region:
         return
     for sid in list(region.subregions.keys()):
@@ -350,7 +350,7 @@ def delete_from_hierarchy(context, region_id, point_index):
         region.touch()
         region.renumber_subregions()
     if not region.subregions:
-        del geometry.regions[region_id]
+        del geometry.TubeGroom.regions[region_id]
         msg = f"Region {region_id} deleted"
     else:
         msg = "Point deleted from hierarchy"
@@ -358,13 +358,13 @@ def delete_from_hierarchy(context, region_id, point_index):
     save_state()
     return msg
 def delete_subregion(context, region_id, subregion_id):
-    region = geometry.regions.get(region_id)
+    region = geometry.TubeGroom.regions.get(region_id)
     if not region or subregion_id not in region.subregions:
         return f"Subregion {region_id}-{subregion_id} not found."
     del region.subregions[subregion_id]
     region.touch()
     if not region.subregions:
-        del geometry.regions[region_id]
+        del geometry.TubeGroom.regions[region_id]
     else:
         region.renumber_subregions()
     update_all_geometry(context, update_topology=True)
@@ -384,8 +384,8 @@ def delete_item_at_mouse(context, event):
         return delete_subregion(context, region_id_e, subregion_id_e) if subregion_id_e > 1 else delete_region(context, region_id_e)
     return None
 def delete_region(context, region_id):
-    if region_id in geometry.regions:
-        del geometry.regions[region_id]
+    if region_id in geometry.TubeGroom.regions:
+        del geometry.TubeGroom.regions[region_id]
         update_all_geometry(context, update_topology=True)
         save_state()
         return f"Region {region_id} deleted"
@@ -399,7 +399,7 @@ def start_drag(context, event, region_id, subregion_id, point_index):
     modal_state.selection.subregion_id = subregion_id
     modal_state.selection.point_index = point_index
     modal_state.dragging_point = True
-    original_pos = geometry.regions[region_id].subregions[subregion_id].points[point_index].position
+    original_pos = geometry.TubeGroom.regions[region_id].subregions[subregion_id].points[point_index].position
     initial_3d = view3d_utils.region_2d_to_location_3d(context.region, context.region_data, (event.mouse_region_x, event.mouse_region_y), original_pos)
     if not initial_3d:
         return False
@@ -408,7 +408,7 @@ def start_drag(context, event, region_id, subregion_id, point_index):
     context.area.tag_redraw()
     return True
 def start_move_column(context, event, region_id, subregion_id, point_index):
-    region = geometry.regions.get(region_id)
+    region = geometry.TubeGroom.regions.get(region_id)
     if not region or subregion_id not in region.subregions or point_index < 0:
         return False
     column_orig = {sid: sub.points[point_index].position.copy() 
@@ -431,9 +431,9 @@ def start_move_column(context, event, region_id, subregion_id, point_index):
 def handle_vertex_drag(context, event):
     mouse_2d = (event.mouse_region_x, event.mouse_region_y)
     if modal_state.column_drag_mode:
-        if not modal_state.column_drag.original_positions or modal_state.selection.region_id not in geometry.regions or modal_state.selection.point_index < 0:
+        if not modal_state.column_drag.original_positions or modal_state.selection.region_id not in geometry.TubeGroom.regions or modal_state.selection.point_index < 0:
             return
-        region = geometry.regions[modal_state.selection.region_id]
+        region = geometry.TubeGroom.regions[modal_state.selection.region_id]
         base_original = modal_state.column_drag.original_positions.get(modal_state.column_drag.active_subregion, modal_state.drag.original_position)
         new_position = modal_state.creation.snap_to_nearest or (
             utils.ray_surface(context, mouse_2d, utils.get_surface_obj(context), avoid_tg=False) if modal_state.column_drag.active_subregion == 1 else
@@ -450,7 +450,7 @@ def handle_vertex_drag(context, event):
             context.area.tag_redraw()
         return
     utils.get_point(mouse_2d, context, 15, True)
-    subregion = geometry.regions[modal_state.selection.region_id].subregions[modal_state.selection.subregion_id]
+    subregion = geometry.TubeGroom.regions[modal_state.selection.region_id].subregions[modal_state.selection.subregion_id]
     if 0 <= modal_state.selection.point_index < len(subregion.points):
         new_position = modal_state.creation.snap_to_nearest or (
             utils.ray_surface(context, mouse_2d, utils.get_surface_obj(context), avoid_tg=False) if modal_state.selection.subregion_id == 1 else
@@ -465,7 +465,7 @@ def handle_vertex_drag(context, event):
 def _end_operation(context, region_id=None):
     """Helper function to end any modal operation consistently."""
     target_region_id = region_id if region_id is not None else modal_state.selection.region_id
-    if target_region_id in geometry.regions:
+    if target_region_id in geometry.TubeGroom.regions:
         update_geometry(context, target_region_id)
     save_state()
     clear_modal_state(keep_edit_mode=True)
@@ -476,7 +476,7 @@ def end_drag(context):
 
 # Move subregion operation
 def start_move_subregion(region_id, subregion_id, start_mouse_3d, hierarchical=False):
-    region = geometry.regions.get(region_id)
+    region = geometry.TubeGroom.regions.get(region_id)
     if not region or subregion_id not in region.subregions:
         return False
     snapshots = collect_subregion_snapshots(region, subregion_id, hierarchical)
@@ -490,10 +490,10 @@ def start_move_subregion(region_id, subregion_id, start_mouse_3d, hierarchical=F
     modal_state.drag.original_position = sum(snapshots[subregion_id], Vector()) / len(snapshots[subregion_id])
     return True
 def handle_move_subregion_mousemove(context, event):
-    if not modal_state.move_subregion_mode or modal_state.selection.region_id not in geometry.regions or not modal_state.move_subregion.original_positions:
+    if not modal_state.move_subregion_mode or modal_state.selection.region_id not in geometry.TubeGroom.regions or not modal_state.move_subregion.original_positions:
         return False
     displacement = view3d_utils.region_2d_to_location_3d(context.region, context.region_data, (event.mouse_region_x, event.mouse_region_y), modal_state.drag.original_position or Vector((0, 0, 0))) - modal_state.drag.start_mouse_3d
-    region = geometry.regions[modal_state.selection.region_id]
+    region = geometry.TubeGroom.regions[modal_state.selection.region_id]
     for sid, originals in modal_state.move_subregion.original_positions.items():
         if sid in region.subregions:
             for i, orig_pos in enumerate(originals):
@@ -511,9 +511,9 @@ def end_move_subregion(context):
 def start_extrusion(context, event):
     mouse_2d = (event.mouse_region_x, event.mouse_region_y)
     region_id, sid_min, sid_max = utils.get_region(mouse_2d, context)
-    if region_id <= 0 or sid_min != sid_max or region_id not in geometry.regions:
+    if region_id <= 0 or sid_min != sid_max or region_id not in geometry.TubeGroom.regions:
         return False, None, None, None
-    region_obj = geometry.regions[region_id]
+    region_obj = geometry.TubeGroom.regions[region_id]
     if not region_obj.subregions or sid_min != max(region_obj.subregions.keys()):
         return False, None, None, None
     tip_subregion = region_obj.subregions[sid_min]
@@ -533,8 +533,8 @@ def handle_extrusion_mousemove(context, event, start_mouse_3d):
     if not modal_state.extrude_mode or not start_mouse_3d or not modal_state.creation.extrude_normal or modal_state.creation.extrude_normal.length == 0:
         return False
     extrude_height = max(0.0, (view3d_utils.region_2d_to_location_3d(context.region, context.region_data, (event.mouse_region_x, event.mouse_region_y), start_mouse_3d) - start_mouse_3d).dot(modal_state.creation.extrude_normal))
-    if modal_state.selection.region_id in geometry.regions and modal_state.creation.extrude_preview_subregion_id:
-        region = geometry.regions[modal_state.selection.region_id]
+    if modal_state.selection.region_id in geometry.TubeGroom.regions and modal_state.creation.extrude_preview_subregion_id:
+        region = geometry.TubeGroom.regions[modal_state.selection.region_id]
         if modal_state.selection.subregion_id in region.subregions and modal_state.creation.extrude_preview_subregion_id in region.subregions:
             tip_subregion = region.subregions[modal_state.selection.subregion_id]
             preview_sub = region.subregions[modal_state.creation.extrude_preview_subregion_id]
@@ -546,7 +546,7 @@ def handle_extrusion_mousemove(context, event, start_mouse_3d):
             return True
     return False
 def end_extrusion(context, region_id):
-    if region_id in geometry.regions:
+    if region_id in geometry.TubeGroom.regions:
         update_geometry(context, region_id, update_topology=True)
     save_state()
     clear_modal_state(keep_edit_mode=True)
@@ -554,7 +554,7 @@ def end_extrusion(context, region_id):
 
 # Scaling operation
 def start_scaling(region_id, subregion_id, hierarchical=False):
-    region = geometry.regions.get(region_id)
+    region = geometry.TubeGroom.regions.get(region_id)
     if not region or subregion_id not in region.subregions or subregion_id == 1:
         return False
     snapshots = collect_subregion_snapshots(region, subregion_id, hierarchical)
@@ -567,7 +567,7 @@ def start_scaling(region_id, subregion_id, hierarchical=False):
     # start_mouse_pos will be set in handle_scaling_mousemove
     return True
 def handle_scaling_mousemove(context, event):
-    if not modal_state.scaling_mode or modal_state.selection.region_id not in geometry.regions or not modal_state.scaling.original_positions:
+    if not modal_state.scaling_mode or modal_state.selection.region_id not in geometry.TubeGroom.regions or not modal_state.scaling.original_positions:
         return False
     if modal_state.scaling.start_mouse_pos is None:
         modal_state.scaling.start_mouse_pos = (event.mouse_region_x, event.mouse_region_y)
@@ -577,7 +577,7 @@ def handle_scaling_mousemove(context, event):
     dy = event.mouse_region_y - modal_state.scaling.start_mouse_pos[1]
     scale_factor = max(0.001, 1.0 + (dx + dy) * 0.005)
     
-    region = geometry.regions[modal_state.selection.region_id]
+    region = geometry.TubeGroom.regions[modal_state.selection.region_id]
     for sid, originals in modal_state.scaling.original_positions.items():
         if sid in region.subregions:
             pivot = sum(originals, Vector()) / len(originals)  # Calculate pivot dynamically
@@ -592,7 +592,7 @@ def end_scaling(context, region_id):
 
 # Rotation operation
 def start_rotation(region_id, subregion_id, hierarchical=True):
-    region = geometry.regions.get(region_id)
+    region = geometry.TubeGroom.regions.get(region_id)
     if not region or subregion_id not in region.subregions:
         return False
     snapshots = collect_subregion_snapshots(region, subregion_id, hierarchical)
@@ -605,7 +605,7 @@ def start_rotation(region_id, subregion_id, hierarchical=True):
     # start_mouse_pos will be set in handle_rotation_mousemove
     return True
 def handle_rotation_mousemove(context, event):
-    if not modal_state.rotation_mode or modal_state.selection.region_id not in geometry.regions or not modal_state.rotation.original_positions:
+    if not modal_state.rotation_mode or modal_state.selection.region_id not in geometry.TubeGroom.regions or not modal_state.rotation.original_positions:
         return False
     if modal_state.rotation.start_mouse_pos is None:
         modal_state.rotation.start_mouse_pos = (event.mouse_region_x, event.mouse_region_y)
@@ -618,7 +618,7 @@ def handle_rotation_mousemove(context, event):
         view_axis = context.region_data.view_matrix.inverted().to_3x3() @ Vector((0, 0, 1))
         rot_m = Matrix.Rotation(angle, 4, view_axis)
     
-    region = geometry.regions[modal_state.selection.region_id]
+    region = geometry.TubeGroom.regions[modal_state.selection.region_id]
     for sub_id, originals in modal_state.rotation.original_positions.items():
         if sub_id in region.subregions:
             for i, orig in enumerate(originals):
@@ -632,7 +632,7 @@ def end_rotation(context, region_id, subregion_id):
 
 # Twist operation
 def start_twist(context, region_id, subregion_id, hierarchical=True):
-    region = geometry.regions.get(region_id)
+    region = geometry.TubeGroom.regions.get(region_id)
     if subregion_id == 1 or not region or subregion_id not in region.subregions:
         return False
     snapshots = collect_subregion_snapshots(region, subregion_id, hierarchical)
@@ -646,7 +646,7 @@ def start_twist(context, region_id, subregion_id, hierarchical=True):
     # start_mouse_pos will be set in handle_twist_mousemove
     return True
 def handle_twist_mousemove(context, event):
-    if not modal_state.twist_mode or modal_state.selection.region_id not in geometry.regions or not modal_state.twist.original_positions:
+    if not modal_state.twist_mode or modal_state.selection.region_id not in geometry.TubeGroom.regions or not modal_state.twist.original_positions:
         return False
     if modal_state.twist.start_mouse_pos is None:
         modal_state.twist.start_mouse_pos = (event.mouse_region_x, event.mouse_region_y)
@@ -661,7 +661,7 @@ def handle_twist_mousemove(context, event):
     if abs(angle) > 0.001 and modal_state.twist.axis and modal_state.twist.axis.length > 0:
         rot_m = Matrix.Rotation(angle, 4, modal_state.twist.axis.normalized())
     
-    region = geometry.regions[modal_state.selection.region_id]
+    region = geometry.TubeGroom.regions[modal_state.selection.region_id]
     for sid, originals in modal_state.twist.original_positions.items():
         if sid in region.subregions:
             for i, orig in enumerate(originals):
@@ -825,14 +825,14 @@ def convert_mesh_object_to_tubegroom(context, mesh_obj, target_obj=None):
         return False, 'Failed to create/find TubeGroom object.'
 
     for rings in all_region_rings:
-        rid = geometry.next_region_id
+        rid = geometry.TubeGroom.next_region_id
         region = geometry.Region(rid, rid)
         for ring in rings:
             sub = region.create_subregion()
             for p in ring:
                 sub.add_point(p.copy())
-        geometry.regions[rid] = region
-        geometry.next_region_id += 1
+        geometry.TubeGroom.regions[rid] = region
+        geometry.TubeGroom.next_region_id += 1
 
     geometry.update_mesh_date(context)
     if context.scene.strand_curves_enabled:

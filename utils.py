@@ -447,7 +447,7 @@ def get_point(mouse_2d, context, distance=40, set_highlight=False):
         hit_depth = (hit_loc_world - camera_loc).length
     
     # Use 2D projection but respect depth - only select points at or in front of mesh depth
-    for region_id, region in geometry.regions.items():
+    for region_id, region in geometry.TubeGroom.regions.items():
         for subregion_id, subregion in region.subregions.items():
             if operators.modal_state.creation.current_region_points and subregion_id != 1:
                 continue
@@ -523,7 +523,7 @@ def get_edge(mouse_2d, context, distance=50):
     if rid1 != rid2 or sid1 != sid2 or rid1 <= 0 or sid1 <= 0:
         return -1, -1, -1, None
     rid, sid = rid1, sid1
-    region = geometry.regions.get(rid)
+    region = geometry.TubeGroom.regions.get(rid)
     if not region:
         return -1, -1, -1, None
     subregion = region.subregions.get(sid)
@@ -589,7 +589,7 @@ def get_region(mouse_2d, context):
     return -1, -1, -1
 def get_region_collapsed(region_id, subregion_id, context, threshold=50):
     # Checks if a subregion's 2D bounding box is smaller than a pixel threshold.
-    region = geometry.regions.get(region_id)
+    region = geometry.TubeGroom.regions.get(region_id)
     if not region:
         return False
     subregion = region.subregions.get(subregion_id)
