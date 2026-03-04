@@ -32,14 +32,18 @@ def register():
         bpy.utils.register_class(cls)
 
 def unregister():
+    import logging
     from . import prop, ui
+    
     try:
         ui.operators.modal_state.edit_mode = False
         from . import drawing
         drawing.remove_draw_handlers()
         ui.operators.modal_state.clear_modal_state()
-    except Exception:
-        pass
+    except AttributeError as e:
+        logging.warning(f"TubeGroom cleanup: {e}")
+    except Exception as e:
+        logging.error(f"TubeGroom unregister error: {e}")
 
     import bpy.utils.previews
     if hasattr(bpy.utils.previews, 'custom_icons'):

@@ -125,6 +125,37 @@ def sample_root_uv(base, radius, seed):
     return poisson_disk_hashgrid(poly_uv, tri_indices, radius, seed)
 
 # Curve generation from region topology
+def _process_root_subregion(u_abs, v_abs, c, t, b, surface_obj, proj_cache):
+    world = c + (t * u_abs) + (b * v_abs)
+    if surface_obj:
+        key = (round(u_abs, 5), round(v_abs, 5))
+        if key not in proj_cache:
+            hit, _ = utils.closest_point(surface_obj, world)
+            proj_cache[key] = hit if hit else world
+        world = proj_cache[key]
+    return world
+
+def _interpolate_nonroot_subregion(u_abs, v_abs, base, f):
+    orig_uv = base['root_uv']
+    if len(orig_uv) != len(f.region_positions) or len(orig_uv) < 3:
+        return None
+    
+    tri_indices = base['tri_indices']
+    for tri in tri_indices:
+        if len(tri) != 3:
+            continue
+        i0, i1, i2 = tri
+        if not (i0 < len(orig_uv) and i1 < len(orig_uv) and i2 < len(orig_uv)):
+            continue
+        
+        p0, p1, p2 = orig_uv[i0], orig_uv[i1], orig_uv[i2]
+        w0, w1, w2, inside = utils.barycentric((u_abs, v_abs), p0, p1, p2)
+        
+        if inside and i0 < len(f.region_positions) and i1 < len(f.region_positions) and i2 < len(f.region_positions):
+            v0, v1, v2 = f.region_positions[i0], f.region_positions[i1], f.region_positions[i2]
+            return v0 * w0 + v1 * w1 + v2 * w2
+    return None
+
 def generate_region_curves(system, region_id):
     region = geometry.TubeGroom.regions.get(region_id)
     if not region:
@@ -181,35 +212,11 @@ def generate_region_curves(system, region_id):
                 continue
             
             if sid == 1:
-                # Root subregion: use original frame + surface projection
-                world = c + (t * u_abs) + (b * v_abs)
-                if surface_obj:
-                    key = (round(u_abs, 5), round(v_abs, 5))
-                    if key not in proj_cache:
-                        hit, _ = utils.closest_point(surface_obj, world)
-                        proj_cache[key] = hit if hit else world
-                    world = proj_cache[key]
+                world = _process_root_subregion(u_abs, v_abs, c, t, b, surface_obj, proj_cache)
             else:
-                # Non-root subregions: use barycentric interpolation with current positions
-                orig_uv = base['root_uv']
-                if len(orig_uv) == len(f.region_positions) and len(orig_uv) >= 3:
-                    # Find barycentric coordinates of UV point in original triangle space
-                    tri_indices = base['tri_indices']
-                    world = None
-                    
-                    # Check each triangle for the point
-                    for tri in tri_indices:
-                        if len(tri) == 3:
-                            i0, i1, i2 = tri
-                            if i0 < len(orig_uv) and i1 < len(orig_uv) and i2 < len(orig_uv):
-                                p0, p1, p2 = orig_uv[i0], orig_uv[i1], orig_uv[i2]
-                                w0, w1, w2, inside = utils.barycentric((u_abs, v_abs), p0, p1, p2)
-                                
-                                if inside and i0 < len(f.region_positions) and i1 < len(f.region_positions) and i2 < len(f.region_positions):
-                                    # Interpolate using current face positions
-                                    v0, v1, v2 = f.region_positions[i0], f.region_positions[i1], f.region_positions[i2]
-                                    world = v0 * w0 + v1 * w1 + v2 * w2
-                                    break
+                world = _interpolate_nonroot_subregion(u_abs, v_abs, base, f)
+                if world is None:
+                    continue
                                 
             curve_points.append(world)
         
@@ -417,6 +424,48 @@ def update_interpolation(context, region_id=None, update_topology=False):
     if curves_obj:
         live_enabled = getattr(context.scene, 'strand_interpolation_enabled', False)
         curves_obj.show_in_front = live_enabled
+def _find_loop_start(vert_indices, adj_list, vert_set):
+    for v_idx in vert_indices:
+        subregion_neighbors = [n for n in adj_list[v_idx] if n in vert_set]
+        if len(subregion_neighbors) == 2:
+            return v_idx
+    return -1
+
+def _walk_vertex_loop(start_node, vert_indices, adj_list, vert_set):
+    ordered_indices = []
+    curr, prev = start_node, -1
+    while len(ordered_indices) < len(vert_indices):
+        ordered_indices.append(curr)
+        neighbors = [n for n in adj_list[curr] if n in vert_set]
+        next_node = next((n for n in neighbors if n != prev), None)
+        if next_node is None:
+            break
+        prev, curr = curr, next_node
+    return ordered_indices if len(ordered_indices) == len(vert_indices) else []
+
+def _build_adjacency_list(mesh):
+    adj_list = [[] for _ in range(len(mesh.vertices))]
+    for edge in mesh.edges:
+        v1, v2 = edge.vertices
+        adj_list[v1].append(v2)
+        adj_list[v2].append(v1)
+    return adj_list
+
+def _extract_sorted_points(verts_by_subregion, mesh, obj, adj_list):
+    sorted_points_by_subregion = {}
+    for (rid, sid), vert_indices in verts_by_subregion.items():
+        if len(vert_indices) < 3:
+            continue
+        vert_set = set(vert_indices)
+        start_node = _find_loop_start(vert_indices, adj_list, vert_set)
+        if start_node == -1:
+            continue
+        ordered_indices = _walk_vertex_loop(start_node, vert_indices, adj_list, vert_set)
+        if ordered_indices:
+            matrix = obj.matrix_world
+            sorted_points_by_subregion[(rid, sid)] = [matrix @ mesh.vertices[v_idx].co for v_idx in ordered_indices]
+    return sorted_points_by_subregion
+
 def rebuild_regions(obj):
     if not obj or obj.type != 'MESH':
         return False
@@ -435,42 +484,8 @@ def rebuild_regions(obj):
         if rid > 0 and sid > 0:
             verts_by_subregion[(rid, sid)].append(i)
     sorted_points_by_subregion = {}
-    num_verts = len(mesh.vertices)
-    adj_list = [[] for _ in range(num_verts)]
-    for edge in mesh.edges:
-        v1, v2 = edge.vertices
-        adj_list[v1].append(v2)
-        adj_list[v2].append(v1)
-    for (rid, sid), vert_indices in verts_by_subregion.items():
-        if len(vert_indices) < 3:
-            continue
-        vert_set = set(vert_indices)
-        # Find a starting vertex (one with exactly two neighbors within the subregion loop)
-        start_node = -1
-        for v_idx in vert_indices:
-            # Count how many neighbors of this vertex are also in the same subregion
-            subregion_neighbors = [n for n in adj_list[v_idx] if n in vert_set]
-            if len(subregion_neighbors) == 2:
-                start_node = v_idx
-                break
-        if start_node == -1:
-            continue
-        # Walk the loop using the adjacency list
-        ordered_indices = []
-        curr, prev = start_node, -1
-        while len(ordered_indices) < len(vert_indices):
-            ordered_indices.append(curr)
-            neighbors = [n for n in adj_list[curr] if n in vert_set]
-            next_node = next((n for n in neighbors if n != prev), None)
-            if next_node is None:
-                break
-            prev, curr = curr, next_node
-        if len(ordered_indices) == len(vert_indices):
-            matrix = obj.matrix_world
-            sorted_points_by_subregion[(rid, sid)] = [
-                matrix @ mesh.vertices[v_idx].co
-                for v_idx in ordered_indices
-            ]
+    adj_list = _build_adjacency_list(mesh)
+    sorted_points_by_subregion = _extract_sorted_points(verts_by_subregion, mesh, obj, adj_list)
     temp_regions = {}
     for (rid, sid), points in sorted_points_by_subregion.items():
         if rid not in temp_regions:

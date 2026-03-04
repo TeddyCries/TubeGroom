@@ -100,9 +100,7 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
     def invoke(self, context, event):
         return self.start_modal(context, event)
     
-    def modal(self, context, event):
-
-        # Check if edit mode was disabled externally
+    def _validate_modal_state(self, context, event):
         if not operators.modal_state.edit_mode:
             self.end_modal(context)
             context.area.tag_redraw()
@@ -118,135 +116,139 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
                 context.area.tag_redraw()
             return {'PASS_THROUGH'}
         context.window.cursor_set('CROSSHAIR')
+        return None
+
+    def _handle_mousemove(self, context, event):
+        if operators.modal_state.extrude_mode:
+            operators.handle_extrusion_mousemove(context, event, operators.modal_state.drag.start_mouse_3d)
+        elif operators.modal_state.scaling_mode:
+            operators.handle_scaling_mousemove(context, event)
+        elif operators.modal_state.rotation_mode:
+            operators.handle_rotation_mousemove(context, event)
+        elif operators.modal_state.dragging_point:
+            operators.handle_vertex_drag(context, event)
+            utils.mouse_preview(context, event)
+        elif operators.modal_state.move_subregion_mode:
+            operators.handle_move_subregion_mousemove(context, event)
+        elif operators.modal_state.twist_mode:
+            operators.handle_twist_mousemove(context, event)
+        else:
+            utils.mouse_preview(context, event)
+        context.area.tag_redraw()
+
+    def _handle_twist_click(self, context, event, body_hit, rid_face, body_sid, rid_e, sid_e1, edge_type):
+        if body_hit:
+            return self.start_twist(context, event, rid_face, body_sid, hierarchical=True)
+        if edge_type == 'horizontal':
+            if rid_e != -1 and sid_e1 > 1:
+                return self.start_twist(context, event, rid_e, sid_e1)
+            if rid_e != -1 and sid_e1 == 1:
+                self.report({'WARNING'}, 'Cannot twist root')
+        elif edge_type == 'vertical':
+            self.report({'WARNING'}, 'Use horizontal edges')
+        else:
+            self.report({'WARNING'}, 'Cannot twist root')
+        return {'RUNNING_MODAL'}
+
+    def _handle_rotation_click(self, context, event, pidx, sid_p, rid_p, body_hit, rid_face, body_sid, rid_e, sid_e1, edge_type):
+        if pidx != -1 and sid_p > 0:
+            return self.start_move_column(context, event, rid_p, sid_p, pidx)
+        if body_hit:
+            return self.start_rotation(context, event, rid_face, body_sid, hierarchical=True)
+        if edge_type == 'horizontal':
+            if sid_e1 > 1:
+                return self.start_rotation(context, event, rid_e, sid_e1)
+            else:
+                self.report({'WARNING'}, 'Cannot rotate root')
+        elif rid_e != -1:
+            self.report({'WARNING'}, 'Use horizontal edges')
+        return {'RUNNING_MODAL'}
+
+    def _handle_scaling_click(self, context, event, body_hit, rid_face, body_sid, pidx, sid_p, rid_p, rid_e, sid_e1, edge_type):
+        if body_hit:
+            return self.start_scaling(context, event, rid_face, body_sid, hierarchical=True)
+        if pidx != -1 and sid_p > 1 and utils.get_region_collapsed(rid_p, sid_p, context, threshold=60):
+            return self.start_scaling(context, event, rid_p, sid_p)
+        elif edge_type == 'horizontal':
+            if sid_e1 > 1:
+                return self.start_scaling(context, event, rid_e, sid_e1)
+            else:
+                self.report({'WARNING'}, 'Cannot scale root')
+        elif rid_e != -1:
+            self.report({'WARNING'}, 'Use horizontal edges')
+        return {'RUNNING_MODAL'}
+
+    def _handle_move_click(self, context, event, body_hit, rid_face, body_sid, pidx, sid_p, rid_p, rid_e, sid_e1, edge_type):
+        if body_hit:
+            return self.start_move_subregion(context, event, rid_face, body_sid, hierarchical=True)
+        if pidx != -1:
+            is_small_point_subregion = sid_p > 1 and utils.get_region_collapsed(rid_p, sid_p, context, threshold=60)
+            if is_small_point_subregion:
+                return self.start_move_subregion(context, event, rid_p, sid_p)
+            else:
+                return self.start_drag_point(context, event, rid_p, sid_p, pidx)
+        elif edge_type == 'horizontal' and sid_e1 != 1:
+            return self.start_move_subregion(context, event, rid_e, sid_e1)
+        return {'RUNNING_MODAL'}
+
+    def _handle_leftclick(self, context, event):
+        mouse_2d = (event.mouse_region_x, event.mouse_region_y)
+        shift, ctrl, alt = event.shift, event.ctrl, event.alt
+        is_creating = bool(operators.modal_state.creation.current_region_points)
+        rid_p, sid_p, pidx, _ = utils.get_point(mouse_2d, context)
+        rid_e, sid_e1, sid_e2_or_edge_idx, edge_type = utils.get_edge(mouse_2d, context)
+        rid_face, sid_face_min, sid_face_max = utils.get_region(mouse_2d, context)
+        body_sid = max(sid_face_max, sid_face_min) if rid_face > 0 and sid_face_min != sid_face_max else -1
+        body_hit = body_sid > 1
+
+        if ctrl and alt and not shift:
+            return self._handle_twist_click(context, event, body_hit, rid_face, body_sid, rid_e, sid_e1, edge_type)
+        if shift and alt and not ctrl:
+            return self._handle_rotation_click(context, event, pidx, sid_p, rid_p, body_hit, rid_face, body_sid, rid_e, sid_e1, edge_type)
+        if ctrl and not alt and not shift:
+            return self.start_extrusion(context, event)
+        if alt and not ctrl and not shift:
+            return self._handle_scaling_click(context, event, body_hit, rid_face, body_sid, pidx, sid_p, rid_p, rid_e, sid_e1, edge_type)
+        if shift and not ctrl and not alt:
+            return self._handle_move_click(context, event, body_hit, rid_face, body_sid, pidx, sid_p, rid_p, rid_e, sid_e1, edge_type)
+        
+        if edge_type == 'horizontal' and rid_e != -1 and sid_e1 > 0:
+            if operators.insert_point_edge(context, rid_e, sid_e1, sid_e2_or_edge_idx):
+                self.report({'INFO'}, 'Point inserted')
+                context.area.tag_redraw()
+                return {'RUNNING_MODAL'}
+        
+        if body_hit and rid_face != -1 and rid_face in geom.TubeGroom.regions:
+            adjacent_subregions = [sid for sid in geom.TubeGroom.regions[rid_face].subregions.keys() if sid != body_sid]
+            if len(adjacent_subregions) >= 1:
+                closest_sub = min(adjacent_subregions, key=lambda s: abs(s - body_sid))
+                if operators.insert_subregion(context, rid_face, min(body_sid, closest_sub), max(body_sid, closest_sub)):
+                    self.report({'INFO'}, 'Subregion inserted')
+                    context.area.tag_redraw()
+                    return {'RUNNING_MODAL'}
+        
+        if is_creating:
+            if operators.modal_state.creation.snap_target and len(operators.modal_state.creation.current_region_points) >= 3:
+                return self.end_region(context)
+            if operators.modal_state.creation.temp_point:
+                return self.start_region(context)
+            return {'RUNNING_MODAL'}
+
+        if operators.modal_state.creation.temp_point and sid_p <= 1:
+            return self.start_region(context)
+        return {'RUNNING_MODAL'}
+
+    def modal(self, context, event):
+        ui_check = self._validate_modal_state(context, event)
+        if ui_check:
+            return ui_check
         
         if event.type in {'WHEELUPMOUSE', 'WHEELDOWNMOUSE', 'MIDDLEMOUSE'}:
             return {'PASS_THROUGH'}
         if event.type == 'MOUSEMOVE':
-            if operators.modal_state.extrude_mode:
-                operators.handle_extrusion_mousemove(context, event, operators.modal_state.drag.start_mouse_3d)
-                context.area.tag_redraw()
-            elif operators.modal_state.scaling_mode:
-                operators.handle_scaling_mousemove(context, event)
-            elif operators.modal_state.rotation_mode:
-                operators.handle_rotation_mousemove(context, event)
-            elif operators.modal_state.dragging_point:
-                operators.handle_vertex_drag(context, event)
-                utils.mouse_preview(context, event)
-            elif operators.modal_state.move_subregion_mode:
-                operators.handle_move_subregion_mousemove(context, event)
-            elif operators.modal_state.twist_mode:
-                operators.handle_twist_mousemove(context, event)
-            else:
-                utils.mouse_preview(context, event)
-            context.area.tag_redraw()
+            self._handle_mousemove(context, event)
         elif event.type == 'LEFTMOUSE' and event.value == 'PRESS':
-            mouse_2d = (event.mouse_region_x, event.mouse_region_y)
-            shift, ctrl, alt = event.shift, event.ctrl, event.alt
-            is_creating = bool(operators.modal_state.creation.current_region_points)
-            rid_p, sid_p, pidx, _ = utils.get_point(
-                mouse_2d,
-                context,
-            )
-            rid_e, sid_e1, sid_e2_or_edge_idx, edge_type = utils.get_edge(mouse_2d, context)
-            rid_face, sid_face_min, sid_face_max = utils.get_region(mouse_2d, context)
-            body_sid = max(sid_face_max, sid_face_min) if rid_face > 0 and sid_face_min != sid_face_max else -1
-            body_hit = body_sid > 1
-            if ctrl and alt and not shift:
-                if body_hit:
-                    return self.start_twist(context, event, rid_face, body_sid, hierarchical=True)
-                if edge_type == 'horizontal':
-                    if rid_e != -1 and sid_e1 > 1:
-                        return self.start_twist(context, event, rid_e, sid_e1)
-                    if rid_e != -1 and sid_e1 == 1:
-                        self.report({'WARNING'}, 'Cannot twist root')
-                elif edge_type == 'vertical':
-                    self.report({'WARNING'}, 'Use horizontal edges')
-                else:
-                    self.report({'WARNING'}, 'Cannot twist root')
-                return {'RUNNING_MODAL'}
-            if shift and alt and not ctrl:
-                if pidx != -1 and sid_p > 0:
-                    return self.start_move_column(context, event, rid_p, sid_p, pidx)
-                if body_hit:
-                    return self.start_rotation(context, event, rid_face, body_sid, hierarchical=True)
-                if edge_type == 'horizontal':
-                    if sid_e1 > 1:
-                        return self.start_rotation(context, event, rid_e, sid_e1)
-                    else:
-                        self.report({'WARNING'}, 'Cannot rotate root')
-                elif rid_e != -1:
-                    self.report({'WARNING'}, 'Use horizontal edges')
-                return {'RUNNING_MODAL'}
-
-            if ctrl and not alt and not shift:
-                return self.start_extrusion(context, event)
-            if alt and not ctrl and not shift:
-                if body_hit:
-                    return self.start_scaling(context, event, rid_face, body_sid, hierarchical=True)
-                if pidx != -1 and sid_p > 1 and utils.get_region_collapsed(rid_p, sid_p, context, threshold=60):
-                    return self.start_scaling(context, event, rid_p, sid_p)
-                elif edge_type == 'horizontal':
-                    if sid_e1 > 1:
-                        return self.start_scaling(context, event, rid_e, sid_e1)
-                    else:
-                        self.report({'WARNING'}, 'Cannot scale root')
-                elif rid_e != -1:
-                    self.report({'WARNING'}, 'Use horizontal edges')
-                return {'RUNNING_MODAL'}
-            if shift and not ctrl and not alt:
-                if body_hit:
-                    return self.start_move_subregion(context, event, rid_face, body_sid, hierarchical=True)
-                if pidx != -1:
-                    is_small_point_subregion = (
-                        sid_p > 1
-                        and utils.get_region_collapsed(
-                            rid_p,
-                            sid_p,
-                            context,
-                            threshold=60,
-                        )
-                    )
-                    if is_small_point_subregion:
-                        return self.start_move_subregion(context, event, rid_p, sid_p)
-                    else:
-                        return self.start_drag_point(context, event, rid_p, sid_p, pidx)
-                elif edge_type == 'horizontal' and sid_e1 != 1:
-                    return self.start_move_subregion(context, event, rid_e, sid_e1)
-                return {'RUNNING_MODAL'}
-            
-            # Double-click or simple click on edge to insert point
-            if edge_type == 'horizontal' and rid_e != -1 and sid_e1 > 0:
-                if operators.insert_point_edge(context, rid_e, sid_e1, sid_e2_or_edge_idx):
-                    self.report({'INFO'}, 'Point inserted')
-                    context.area.tag_redraw()
-                    return {'RUNNING_MODAL'}
-            
-            # Double-click or simple click on body to insert subregion
-            if body_hit and rid_face != -1 and rid_face in geom.TubeGroom.regions:
-                adjacent_subregions = [sid for sid in geom.TubeGroom.regions[rid_face].subregions.keys() if sid != body_sid]
-                if len(adjacent_subregions) >= 1:
-                    closest_sub = min(adjacent_subregions, key=lambda s: abs(s - body_sid))
-                    if operators.insert_subregion(context, rid_face, min(body_sid, closest_sub), max(body_sid, closest_sub)):
-                        self.report({'INFO'}, 'Subregion inserted')
-                        context.area.tag_redraw()
-                        return {'RUNNING_MODAL'}
-            
-            if is_creating:
-                # If snap_target is set and we have 3+ points, close the region
-                if operators.modal_state.creation.snap_target and len(operators.modal_state.creation.current_region_points) >= 3:
-                    return self.end_region(context)
-                # Otherwise add a new point
-                if operators.modal_state.creation.temp_point:
-                    return self.start_region(context)
-                return {'RUNNING_MODAL'}
-
-            # If not creating, we are trying to start a new region.
-            if operators.modal_state.creation.temp_point:
-                # A temp_point exists. It's either on the surface, or snapped to an existing point.
-                if sid_p <= 1:  # Clicked on surface (-1) or a root point (1)
-                    return self.start_region(context)
-
-            return {'RUNNING_MODAL'}
+            return self._handle_leftclick(context, event)
         elif event.type == 'LEFTMOUSE' and event.value == 'RELEASE':
             if operators.modal_state.extrude_mode:
                 return self.end_extrusion(context)
