@@ -16,7 +16,7 @@ class TUBEGROOM_PT_main_panel(bpy.types.Panel):
     def draw(self, context):
         pass   
 class TUBEGROOM_OT_create_tubegroom(bpy.types.Operator):
-    bl_idname = "strand.create_tubegroom"
+    bl_idname = "tubegroom.create"
     bl_label = "Create TubeGroom"
     bl_description = "Create a new TubeGroom object for the selected mesh"
     bl_options = {'REGISTER', 'UNDO'}
@@ -40,7 +40,7 @@ class TUBEGROOM_OT_create_tubegroom(bpy.types.Operator):
         self.report({'INFO'}, f"Created: {obj.name}")
         return {'FINISHED'}
 class TUBEGROOM_OT_mesh_to_tubegroom(bpy.types.Operator):
-    bl_idname = "strand.convert"
+    bl_idname = "tubegroom.convert"
     bl_label = "Mesh to TubeGroom"
     bl_description = "Convert a tube-like mesh into a TubeGroom region by detecting rings"
     bl_options = {'REGISTER', 'UNDO'}
@@ -75,8 +75,8 @@ class TUBEGROOM_PT_mesh_panel(bpy.types.Panel):
         box_create = layout.box()
         box_create.label(text="Target object")
         box_create.prop(context.scene, "strand_raycast_target", text="")
-        box_create .operator("strand.create_tubegroom", text="Create TubeGroom", icon='OUTLINER_OB_MESH')
-        box_create .operator('strand.convert', text='Mesh to TubeGroom', icon='MESH_CYLINDER')
+        box_create .operator("tubegroom.create", text="Create TubeGroom", icon='OUTLINER_OB_MESH')
+        box_create .operator('tubegroom.convert', text='Mesh to TubeGroom', icon='MESH_CYLINDER')
         layout.separator()
         box_config = layout.box()
         box_config.label(text="Configuration:")
@@ -89,10 +89,10 @@ class TUBEGROOM_PT_mesh_panel(bpy.types.Panel):
         edit_mode = operators.modal_state.edit_mode
         op_text = "Exit TubeGroom Edit" if edit_mode else "TubeGroom Edit"
         op_icon = 'X' if edit_mode else 'GREASEPENCIL'
-        col.operator("strand.edit_mode", text=op_text, icon=op_icon)
-        col.operator("strand.clear_points", text="Clear All Regions", icon='TRASH')
+        col.operator("tubegroom.edit_mode", text=op_text, icon=op_icon)
+        col.operator("tubegroom.clear_points", text="Clear All Regions", icon='TRASH')
 class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
-    bl_idname = "strand.edit_mode"
+    bl_idname = "tubegroom.edit_mode"
     bl_label = "Click to Add Points"
     bl_description = "Enter interactive edit mode to create and modify TubeGroom guides"
     bl_options = {'REGISTER', 'UNDO'}
@@ -491,7 +491,7 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
         self.report({'INFO'}, f"{len(geom.TubeGroom.regions)} regions, {total_points} points")
         return {'FINISHED'}
 class TUBEGROOM_OT_clear_points(bpy.types.Operator):
-    bl_idname = "strand.clear_points"
+    bl_idname = "tubegroom.clear_points"
     bl_label = "Clear All Regions"
     bl_description = "Delete all TubeGroom regions and clear all associated data"
     bl_options = {'REGISTER', 'UNDO'}

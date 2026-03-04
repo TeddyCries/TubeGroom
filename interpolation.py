@@ -185,7 +185,8 @@ def generate_region_curves(system, region_id):
     n_points = base['n_points']
     for f in faces:
         if len(f.region_positions) == n_points:
-            f.tri_indices = base['tri_indices']
+            if 'tri_indices' in base:
+                f.tri_indices = base['tri_indices']
     system['face_topology'][region_id] = faces
     
     radius = system['radius']
