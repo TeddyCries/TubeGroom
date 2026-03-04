@@ -619,17 +619,22 @@ def mouse_preview(context, event):
     creation.temp_point = None
     creation.snap_target = None
     creation.snap_to_nearest = None
+    creation.hovered_edge = None
     
     current_pts = creation.current_region_points
-    if len(current_pts) >= 3:
-        first_2d = project_2d(current_pts[0], context)
-        if first_2d and (Vector(mouse_2d) - Vector(first_2d)).length < 20:
-            creation.snap_target = current_pts[0]
-            creation.temp_point = Vector(current_pts[0])
-
+    
+    # Get nearest point first
     rid, sid, pidx, nearest_pos = get_point(mouse_2d, context, 50, True)
     if nearest_pos:
         creation.temp_point = Vector(nearest_pos)
+        # Check if the nearest point is the first point of current region (to close loop)
+        if len(current_pts) >= 3 and rid == -1 and pidx == 0:
+            creation.snap_target = current_pts[0]
+    
+    # Detect hovered edge
+    rid_e, sid_e, edge_idx, edge_type = get_edge(mouse_2d, context, 50)
+    if edge_type == 'horizontal' and rid_e > 0 and sid_e > 0:
+        creation.hovered_edge = (rid_e, sid_e, edge_idx)
 
     base_obj = get_surface_obj(context)
     if base_obj and base_obj.data.vertices:

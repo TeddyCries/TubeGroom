@@ -6,33 +6,30 @@ from . import utils
 
 # Draw Handlers and Cache
 class DrawHandlers:
-    def __init__(self):
-        self.points_handler = None
-        self.edges_handler = None
-        self.regions_handler = None
-        self.cache = {'regions': {}, 'edges': {}, 'points': {}}
-
-draw_handlers = DrawHandlers()
+    points_handler = None
+    edges_handler = None
+    regions_handler = None
+    cache = {'regions': {}, 'edges': {}, 'points': {}}
 
 def remove_draw_handlers():
-        if draw_handlers.points_handler:
-            bpy.types.SpaceView3D.draw_handler_remove(draw_handlers.points_handler, 'WINDOW')
-            draw_handlers.points_handler = None
-        if draw_handlers.edges_handler:
-            bpy.types.SpaceView3D.draw_handler_remove(draw_handlers.edges_handler, 'WINDOW')
-            draw_handlers.edges_handler = None
-        if draw_handlers.regions_handler:
-            bpy.types.SpaceView3D.draw_handler_remove(draw_handlers.regions_handler, 'WINDOW')
-            draw_handlers.regions_handler = None
+        if DrawHandlers.points_handler:
+            bpy.types.SpaceView3D.draw_handler_remove(DrawHandlers.points_handler, 'WINDOW')
+            DrawHandlers.points_handler = None
+        if DrawHandlers.edges_handler:
+            bpy.types.SpaceView3D.draw_handler_remove(DrawHandlers.edges_handler, 'WINDOW')
+            DrawHandlers.edges_handler = None
+        if DrawHandlers.regions_handler:
+            bpy.types.SpaceView3D.draw_handler_remove(DrawHandlers.regions_handler, 'WINDOW')
+            DrawHandlers.regions_handler = None
 
         clear_cache()
 
 # Cache Utilities
 def clear_cache():
-        for section in draw_handlers.cache.values():
+        for section in DrawHandlers.cache.values():
             section.clear()
 def cache_handler(cache_section, cache_key, key, fn):
-    cache_dict = draw_handlers.cache[cache_section]
+    cache_dict = DrawHandlers.cache[cache_section]
     entry = cache_dict.get(cache_key)
     if not entry or entry['key'] != key:
         cache_dict[cache_key] = {'key': key, 'positions': fn()}
@@ -106,12 +103,12 @@ def draw_regions(context):
             continue
         extra = ('rootfill', round(float(root_offset), 6), 4, getattr(obj, 'name', None))
         key = (root.last_modified, extra)
-        entry = draw_handlers.cache['regions'].get(region_id)
+        entry = DrawHandlers.cache['regions'].get(region_id)
 
         if not entry or entry['key'] != key:
             shrink_positions = utils.snap_points(obj, root.get_positions(), root_offset, 4)
             tris = triangulate_polygon(shrink_positions)
-            draw_handlers.cache['regions'][region_id] = {'key': key, 'tris': tris}
+            DrawHandlers.cache['regions'][region_id] = {'key': key, 'tris': tris}
         else:
             tris = entry['tris']
 
@@ -138,6 +135,10 @@ def draw_edges(context):
     obj = utils.get_surface_obj(context)
     root_offset = getattr(context.scene, 'strand_root_offset', 0.005)
     all_edges = []
+    highlighted_edges = []
+    
+    # Get hovered edge info
+    hovered = operators.modal_state.creation.hovered_edge
 
     for region in geometry.TubeGroom.regions.values():
         for sub_id, sub in region.subregions.items():
@@ -152,14 +153,27 @@ def draw_edges(context):
                 )
             else:
                 shrink_positions = sub.get_positions()
+            
+            # Check if this entire subregion loop is hovered
+            is_hovered = hovered and hovered[0] == region.region_id and hovered[1] == sub_id
+            
             for i in range(len(shrink_positions)):
                 start = shrink_positions[i]
                 end = shrink_positions[(i + 1) % len(shrink_positions)]
-                all_edges.extend((start, end))
+                if is_hovered:
+                    highlighted_edges.extend((start, end))
+                else:
+                    all_edges.extend((start, end))
 
     if all_edges:
         gpu.state.depth_test_set('LESS_EQUAL')
         draw_batch(gpu.shader.from_builtin('UNIFORM_COLOR'), 'LINES', all_edges, (1,1,1,1), width=2.0)
+        gpu.state.depth_test_set('NONE')
+    
+    # Draw highlighted edges on top
+    if highlighted_edges:
+        gpu.state.depth_test_set('LESS_EQUAL')
+        draw_batch(gpu.shader.from_builtin('UNIFORM_COLOR'), 'LINES', highlighted_edges, (1,1,0,1), width=3.0)
         gpu.state.depth_test_set('NONE')
 
     if len(operators.modal_state.creation.current_region_points) >= 2:
@@ -172,7 +186,8 @@ def draw_edges(context):
     if operators.modal_state.creation.current_region_points and operators.modal_state.creation.temp_point and not operators.modal_state.dragging_point:
         start = operators.modal_state.creation.current_region_points[-1]
         end = operators.modal_state.creation.current_region_points[0] if operators.modal_state.creation.snap_target and len(operators.modal_state.creation.current_region_points)>=3 else operators.modal_state.creation.temp_point
-        draw_batch(gpu.shader.from_builtin('UNIFORM_COLOR'), 'LINES', [start, end], (1.0,1.0,0.0,0.8), width=2.0)
+        color = (1.0,1.0,0.0,0.8) if operators.modal_state.creation.snap_to_nearest else (1.0,1.0,0.0,0.8)
+        draw_batch(gpu.shader.from_builtin('UNIFORM_COLOR'), 'LINES', [start, end], color, width=2.0)
 def draw_points(context):
     from . import geometry, operators
     obj = utils.get_surface_obj(context)

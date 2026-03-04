@@ -21,6 +21,7 @@ class CreationState:
         self.temp_point = None
         self.snap_target = None
         self.snap_to_nearest = None
+        self.hovered_edge = None  # Stores (region_id, subregion_id, edge_index) when hovering over an edge
         # Extrude (creates new subregion)
         self.extrude_preview_subregion_id = None
         self.extrude_normal = None

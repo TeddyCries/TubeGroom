@@ -3,10 +3,6 @@ import bpy
 from mathutils import Vector
 from . import utils, geometry
 
-# Local variables for interpolation
-tubegroom_data = None
-curves_signature = {}
-
 # Face primitive
 class Face:
     def __init__(self, subregion_id, center, normal, tangent, bitangent, region_positions):
@@ -15,6 +11,11 @@ class Face:
         self.normal = normal
         self.region_positions = region_positions
         self.tri_indices = None
+
+# Interpolation data manager
+class InterpolationData:
+    system = None
+    curves_signature = {}
 
 # System creation
 def create_system(radius=None):
@@ -283,9 +284,7 @@ def build_curves_object(base_name, system):
     old_data = obj.data if obj else None
     new_sizes = [len(c['points']) for c in streams]
     curr_sig = tuple(sorted([(s.get('region_id'), len(s['points'])) for s in streams]))
-    global curves_signature
-    sig_map = curves_signature
-    prev_sig = sig_map.get(name_obj)
+    prev_sig = InterpolationData.curves_signature.get(name_obj)
     topology_changed = (prev_sig != curr_sig)
     if not topology_changed and old_data and hasattr(old_data, 'curves') and len(old_data.curves) == len(new_sizes):
         old_sizes = [len(c.points) for c in old_data.curves]
@@ -321,7 +320,7 @@ def build_curves_object(base_name, system):
         for mat in old_data.materials:
             if mat:
                 new_data.materials.append(mat)
-    curves_signature[name_obj] = curr_sig
+    InterpolationData.curves_signature[name_obj] = curr_sig
     if obj is None:
         obj = bpy.data.objects.new(name_obj, new_data)
         if hasattr(bpy.context.scene, 'collection'):
@@ -343,30 +342,29 @@ def build_curves_object(base_name, system):
         
     return obj
 def generate_interpolation():
-    global tubegroom_data
     if not geometry.TubeGroom.regions:
         system = create_system()
-        tubegroom_data = system
+        InterpolationData.system = system
         return system
     
     current_radius = float(getattr(bpy.context.scene, 'strand_poisson_radius', 0.02))
     
-    if isinstance(tubegroom_data, dict) and 'curves' in tubegroom_data:
-        tubegroom_data['radius'] = current_radius
-        old_radius = tubegroom_data.get('last_global_radius')
+    if isinstance(InterpolationData.system, dict) and 'curves' in InterpolationData.system:
+        InterpolationData.system['radius'] = current_radius
+        old_radius = InterpolationData.system.get('last_global_radius')
         if old_radius is None or abs(old_radius - current_radius) > 1e-6:
-            tubegroom_data['last_global_radius'] = current_radius
-            for base in tubegroom_data.get('region_base', {}).values():
+            InterpolationData.system['last_global_radius'] = current_radius
+            for base in InterpolationData.system.get('region_base', {}).values():
                 base.pop('uv_pts_abs', None)
                 base.pop('last_radius', None)
-        generate_all_curves(tubegroom_data)
-        return tubegroom_data
+        generate_all_curves(InterpolationData.system)
+        return InterpolationData.system
     
     # Create new system
     system = create_system(radius=current_radius)
     system['last_global_radius'] = current_radius
     generate_all_curves(system)
-    tubegroom_data = system
+    InterpolationData.system = system
     return system
 
 # Interpolation management functions
@@ -374,7 +372,6 @@ def update_interpolation(context, region_id=None, update_topology=False):
     if not getattr(context.scene, 'strand_curves_enabled', False):
         return
     
-    global tubegroom_data
     base_obj = geometry.get_tg_obj(context, allow_create=False)
     if not base_obj:
         return
@@ -384,7 +381,7 @@ def update_interpolation(context, region_id=None, update_topology=False):
         return
     
     if not geometry.TubeGroom.regions:
-        tubegroom_data = None
+        InterpolationData.system = None
         system = create_system()
         build_curves_object(base_name, system)
         return
@@ -392,7 +389,7 @@ def update_interpolation(context, region_id=None, update_topology=False):
     if not getattr(context.scene, 'strand_interpolation_enabled', False):
         return
     
-    system = tubegroom_data or generate_interpolation()
+    system = InterpolationData.system or generate_interpolation()
     if not isinstance(system, dict):
         system = generate_interpolation()
     
@@ -415,7 +412,7 @@ def update_interpolation(context, region_id=None, update_topology=False):
     else:
         generate_region_curves_cached(system, region_id)
     
-    tubegroom_data = system
+    InterpolationData.system = system
     curves_obj = build_curves_object(base_name, system)
     if curves_obj:
         live_enabled = getattr(context.scene, 'strand_interpolation_enabled', False)

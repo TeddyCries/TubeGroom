@@ -232,8 +232,10 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
                         return {'RUNNING_MODAL'}
             
             if is_creating:
+                # If snap_target is set and we have 3+ points, close the region
                 if operators.modal_state.creation.snap_target and len(operators.modal_state.creation.current_region_points) >= 3:
                     return self.end_region(context)
+                # Otherwise add a new point
                 if operators.modal_state.creation.temp_point:
                     return self.start_region(context)
                 return {'RUNNING_MODAL'}
@@ -319,21 +321,21 @@ class TUBEGROOM_OT_edit_mode(bpy.types.Operator):
         operators.save_state()
       
         from . import drawing as draw_regions
-        from .drawing import draw_handlers
+        from .drawing import DrawHandlers
 
-        draw_handlers.regions_handler = bpy.types.SpaceView3D.draw_handler_add(
+        DrawHandlers.regions_handler = bpy.types.SpaceView3D.draw_handler_add(
             draw_regions.draw_regions,
             (context,),
             'WINDOW',
             'POST_VIEW'
         )
-        draw_handlers.edges_handler = bpy.types.SpaceView3D.draw_handler_add(
+        DrawHandlers.edges_handler = bpy.types.SpaceView3D.draw_handler_add(
             draw_regions.draw_edges,
             (context,),
             'WINDOW',
             'POST_VIEW'
         )
-        draw_handlers.points_handler = bpy.types.SpaceView3D.draw_handler_add(
+        DrawHandlers.points_handler = bpy.types.SpaceView3D.draw_handler_add(
             draw_regions.draw_points,
             (context,),
             'WINDOW',
